@@ -11,10 +11,12 @@ Flow:
 
 import os
 import uuid
-import queue
-import threading
 import logging
 import sys
+import json
+import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 from types import SimpleNamespace
@@ -56,39 +58,173 @@ SCHOOLOGY_CONSUMER_KEY = os.environ.get("SCHOOLOGY_CONSUMER_KEY")
 SCHOOLOGY_CONSUMER_SECRET = os.environ.get("SCHOOLOGY_CONSUMER_SECRET")
 SCHOOLOGY_DOMAIN = os.environ.get("SCHOOLOGY_DOMAIN", "https://app.schoology.com")
 SCHOOLOGY_API_DOMAIN = os.environ.get("SCHOOLOGY_API_DOMAIN", "https://api.schoology.com")
+JOB_DB_PATH = os.environ.get("JOB_DB_PATH", "/data/jobs.db")
 
 if not SCHOOLOGY_CONSUMER_KEY or not SCHOOLOGY_CONSUMER_SECRET:
     logger.warning("Schoology consumer key/secret missing; OAuth will fail.")
 
-# In-memory stores (MVP). For durability, swap to SQLite/Redis.
-jobs = {}  # job_id -> job dict
+# Initialize jobs database ---------------------------------------------------
+def init_job_db():
+    conn = sqlite3.connect(JOB_DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            status TEXT,
+            created_at TEXT,
+            email TEXT,
+            access_token TEXT,
+            access_token_secret TEXT,
+            slides_json TEXT,
+            error TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
 
-job_queue: queue.Queue = queue.Queue()
+
+init_job_db()
 
 
 # Background worker ----------------------------------------------------------
 def worker():
     while True:
-        payload = job_queue.get()
-        if payload is None:  # allow clean shutdown
-            break
-        job_id = payload["job_id"]
+        job = claim_next_job()
+        if not job:
+            time.sleep(2)
+            continue
+        job_id = job["id"]
+        logger.info("Processing job %s", job_id)
         try:
-            jobs[job_id]["status"] = "running"
-            slides = build_recap(payload)
-            jobs[job_id]["slides"] = slides
-            jobs[job_id]["status"] = "done"
+            update_job_status(job_id, "running")
+            slides = build_recap(
+                {
+                    "job_id": job_id,
+                    "access_token": job["access_token"],
+                    "access_token_secret": job["access_token_secret"],
+                    "email": job["email"],
+                }
+            )
+            save_job_result(job_id, slides)
+            update_job_status(job_id, "done")
             # TODO: send SES email here with link to /recap?id={job_id}
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Job %s failed", job_id)
-            jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"] = str(exc)
-        finally:
-            job_queue.task_done()
+            update_job_status(job_id, "error", error=str(exc))
 
 
 worker_thread = threading.Thread(target=worker, daemon=True)
 worker_thread.start()
+
+
+# Job persistence helpers ---------------------------------------------------
+def get_conn():
+    return sqlite3.connect(JOB_DB_PATH, check_same_thread=False)
+
+
+def create_job(job_id, email, access_token, access_token_secret):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO jobs (id, status, created_at, email, access_token, access_token_secret, slides_json, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            "queued",
+            datetime.utcnow().isoformat(),
+            email,
+            access_token,
+            access_token_secret,
+            None,
+            None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_job_status(job_id, status, error=None):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE jobs SET status = ?, error = ? WHERE id = ?",
+        (status, error, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_job_result(job_id, slides):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE jobs SET slides_json = ?, status = ? WHERE id = ?",
+        (json.dumps(slides), "done", job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def fetch_job(job_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, status, created_at, email, slides_json, error FROM jobs WHERE id = ?",
+        (job_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    slides = json.loads(row[4]) if row[4] else None
+    return {
+        "id": row[0],
+        "status": row[1],
+        "created_at": row[2],
+        "email": row[3],
+        "slides": slides,
+        "error": row[5],
+    }
+
+
+def claim_next_job():
+    """Atomically claim the next queued job."""
+    conn = get_conn()
+    conn.isolation_level = "EXCLUSIVE"
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1"
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return None
+    job_id = row[0]
+    cur.execute(
+        "UPDATE jobs SET status = 'running' WHERE id = ? AND status = 'queued'",
+        (job_id,),
+    )
+    if cur.rowcount == 1:
+        cur.execute(
+            "SELECT id, email, access_token, access_token_secret FROM jobs WHERE id = ?",
+            (job_id,),
+        )
+        job_row = cur.fetchone()
+        conn.commit()
+        conn.close()
+        return {
+            "id": job_row[0],
+            "email": job_row[1],
+            "access_token": job_row[2],
+            "access_token_secret": job_row[3],
+        }
+    conn.commit()
+    conn.close()
+    return None
 
 
 # Helpers -------------------------------------------------------------------
@@ -600,21 +736,7 @@ def auth_callback():
     email = getattr(me, "primary_email", None)
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
-        "status": "queued",
-        "created_at": datetime.utcnow().isoformat(),
-        "email": email,
-        "slides": None,
-        "error": None,
-    }
-    job_queue.put(
-        {
-            "job_id": job_id,
-            "access_token": access_token,
-            "access_token_secret": access_token_secret,
-            "email": email,
-        }
-    )
+    create_job(job_id, email, access_token, access_token_secret)
 
     return redirect(url_for("recap_view", id=job_id))
 
@@ -627,7 +749,7 @@ def recap_view():
 
 @app.route("/api/job/<job_id>")
 def job_status(job_id):
-    job = jobs.get(job_id)
+    job = fetch_job(job_id)
     if not job:
         return jsonify({"error": "not_found"}), 404
     return jsonify(job)

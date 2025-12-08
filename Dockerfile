@@ -15,8 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Persistent data directory for sqlite
+RUN mkdir -p /data
+
 COPY . .
 
 EXPOSE 5002
 
-CMD ["gunicorn", "-b", "0.0.0.0:5002", "-w", "4", "--access-logfile", "-", "--error-logfile", "-", "--capture-output", "--log-level", "info", "app:app"]
+# Use a single worker so in-memory job state remains consistent across requests.
+CMD ["gunicorn", "-b", "0.0.0.0:5002", "-w", "1", "--access-logfile", "-", "--error-logfile", "-", "--capture-output", "--log-level", "info", "app:app"]

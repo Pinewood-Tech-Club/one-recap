@@ -8,3 +8,10 @@ services:
     ports:
       - "5002:5002"
     restart: unless-stopped
+    environment:
+      - JOB_DB_PATH=/data/jobs.db
+    volumes:
+      - jobs-data:/data
+
+volumes:
+  jobs-data:
