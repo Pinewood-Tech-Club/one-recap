@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your Recap</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #111827;
+      --accent: #22d3ee;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+    }
+    .shell {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .slide {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(780px, 92vw);
+      background: var(--card);
+      border: 1px solid #1f2937;
+      border-radius: 18px;
+      padding: 32px 40px;
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+    }
+    .title {
+      font-size: 18px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .big {
+      font-size: 48px;
+      font-weight: 800;
+      margin: 0 0 8px 0;
+      letter-spacing: -0.01em;
+    }
+    .bottom {
+      font-size: 18px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .list {
+      margin-top: 16px;
+      padding: 0;
+      list-style: none;
+      color: var(--text);
+    }
+    .list li {
+      margin: 8px 0;
+      font-size: 16px;
+      color: var(--muted);
+    }
+    .nav {
+      position: absolute;
+      bottom: 24px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #1f2937;
+      cursor: pointer;
+      transition: transform 150ms ease, background 150ms ease;
+    }
+    .dot.active {
+      background: var(--accent);
+      transform: scale(1.15);
+    }
+    .status {
+      font-size: 18px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.6;
+    }
+    .nav-btn {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(17, 24, 39, 0.65);
+      border: 1px solid #1f2937;
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    .nav-btn:hover { background: rgba(31, 41, 55, 0.7); }
+    .nav-btn.left { left: 14px; }
+    .nav-btn.right { right: 14px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .grid-card {
+      padding: 12px;
+      background: #0b1224;
+      border: 1px solid #1f2937;
+      border-radius: 12px;
+    }
+    .grid-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .grid-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="shell" id="shell">
+    <div class="status" id="status">Loading your recap...</div>
+  </div>
+
+  <script>
+    const jobId = "{{ job_id or '' }}";
+    const shell = document.getElementById("shell");
+    const statusEl = document.getElementById("status");
+
+    let slides = [];
+    let current = 0;
+
+    const render = () => {
+      shell.innerHTML = "";
+      if (!slides.length) return;
+      const slide = slides[current];
+
+      const s = document.createElement("div");
+      s.className = "slide";
+      s.addEventListener("click", () => next());
+
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <div class="title">${slide.title || ""}</div>
+        <div class="big">${slide.big ?? ""}</div>
+        <div class="bottom">${slide.bottom || ""}</div>
+      `;
+
+      if (slide.list && slide.list.length) {
+        const ul = document.createElement("ul");
+        ul.className = "list";
+        slide.list.forEach(item => {
+          const sections = item.sections && item.sections.length ? ` <small>(${item.sections.join(", ")})</small>` : "";
+          const li = document.createElement("li");
+          li.innerHTML = `${item.name} (${item.count} classes)${sections}`;
+          ul.appendChild(li);
+        });
+        card.appendChild(ul);
+      }
+
+      if (slide.grid && slide.grid.length) {
+        const grid = document.createElement("div");
+        grid.className = "grid";
+        slide.grid.forEach(cell => {
+          const gc = document.createElement("div");
+          gc.className = "grid-card";
+          gc.innerHTML = `<div class="grid-label">${cell.label}</div><div class="grid-value">${cell.value}</div>`;
+          grid.appendChild(gc);
+        });
+        card.appendChild(grid);
+      }
+
+      s.appendChild(card);
+      shell.appendChild(s);
+
+      // Navigation dots
+      const nav = document.createElement("div");
+      nav.className = "nav";
+      slides.forEach((_, idx) => {
+        const dot = document.createElement("div");
+        dot.className = "dot" + (idx === current ? " active" : "");
+        dot.addEventListener("click", (e) => { e.stopPropagation(); current = idx; render(); });
+        nav.appendChild(dot);
+      });
+      shell.appendChild(nav);
+
+      // Arrows
+      const left = document.createElement("button");
+      left.className = "nav-btn left";
+      left.textContent = "◀";
+      left.onclick = (e) => { e.stopPropagation(); prev(); };
+      shell.appendChild(left);
+
+      const right = document.createElement("button");
+      right.className = "nav-btn right";
+      right.textContent = "▶";
+      right.onclick = (e) => { e.stopPropagation(); next(); };
+      shell.appendChild(right);
+    };
+
+    const next = () => { current = (current + 1) % slides.length; render(); };
+    const prev = () => { current = (current - 1 + slides.length) % slides.length; render(); };
+
+    async function poll() {
+      if (!jobId) {
+        statusEl.textContent = "No recap ID provided.";
+        return;
+      }
+      try {
+        const res = await fetch(`/api/job/${jobId}`);
+        if (!res.ok) throw new Error("Failed to fetch job");
+        const data = await res.json();
+        if (data.status === "done" && Array.isArray(data.slides)) {
+          slides = data.slides;
+          if (slides.length === 0) {
+            statusEl.textContent = "No data to show yet.";
+            return;
+          }
+          render();
+        } else if (data.status === "error") {
+          statusEl.textContent = "Something went wrong: " + (data.error || "unknown error");
+        } else {
+          statusEl.textContent = "Generating your recap... (status: " + data.status + ")";
+          setTimeout(poll, 2500);
+        }
+      } catch (err) {
+        statusEl.textContent = "Error loading recap.";
+        console.error(err);
+      }
+    }
+
+    poll();
+    document.addEventListener("keydown", (e) => {
+      if (!slides.length) return;
+      if (e.key === "ArrowRight" || e.key === " ") next();
+      if (e.key === "ArrowLeft") prev();
+    });
+  </script>
+</body>
+</html>
