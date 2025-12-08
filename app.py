@@ -14,6 +14,7 @@ import uuid
 import queue
 import threading
 import logging
+import sys
 from datetime import datetime, timedelta
 from collections import defaultdict
 from types import SimpleNamespace
@@ -38,7 +39,11 @@ except Exception:
 import schoolopy
 import requests_oauthlib
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)

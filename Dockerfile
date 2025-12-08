@@ -19,4 +19,4 @@ COPY . .
 
 EXPOSE 5002
 
-CMD ["gunicorn", "-b", "0.0.0.0:5002", "-w", "4", "app:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:5002", "-w", "4", "--access-logfile", "-", "--error-logfile", "-", "--capture-output", "--log-level", "info", "app:app"]
