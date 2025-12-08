@@ -89,36 +89,6 @@ init_job_db()
 
 
 # Background worker ----------------------------------------------------------
-def worker():
-    while True:
-        job = claim_next_job()
-        if not job:
-            time.sleep(2)
-            continue
-        job_id = job["id"]
-        logger.info("Processing job %s", job_id)
-        try:
-            update_job_status(job_id, "running")
-            slides = build_recap(
-                {
-                    "job_id": job_id,
-                    "access_token": job["access_token"],
-                    "access_token_secret": job["access_token_secret"],
-                    "email": job["email"],
-                }
-            )
-            save_job_result(job_id, slides)
-            update_job_status(job_id, "done")
-            # TODO: send SES email here with link to /recap?id={job_id}
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Job %s failed", job_id)
-            update_job_status(job_id, "error", error=str(exc))
-
-
-worker_thread = threading.Thread(target=worker, daemon=True)
-worker_thread.start()
-
-
 # Job persistence helpers ---------------------------------------------------
 def get_conn():
     return sqlite3.connect(JOB_DB_PATH, check_same_thread=False)
@@ -225,6 +195,37 @@ def claim_next_job():
     conn.commit()
     conn.close()
     return None
+
+
+# Background worker ----------------------------------------------------------
+def worker():
+    while True:
+        job = claim_next_job()
+        if not job:
+            time.sleep(2)
+            continue
+        job_id = job["id"]
+        logger.info("Processing job %s", job_id)
+        try:
+            update_job_status(job_id, "running")
+            slides = build_recap(
+                {
+                    "job_id": job_id,
+                    "access_token": job["access_token"],
+                    "access_token_secret": job["access_token_secret"],
+                    "email": job["email"],
+                }
+            )
+            save_job_result(job_id, slides)
+            update_job_status(job_id, "done")
+            # TODO: send SES email here with link to /recap?id={job_id}
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Job %s failed", job_id)
+            update_job_status(job_id, "error", error=str(exc))
+
+
+worker_thread = threading.Thread(target=worker, daemon=True)
+worker_thread.start()
 
 
 # Helpers -------------------------------------------------------------------
