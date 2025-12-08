@@ -64,7 +64,6 @@ SCHOOLOGY_API_DOMAIN = os.environ.get("SCHOOLOGY_API_DOMAIN", "https://api.schoo
 JOB_DB_PATH = os.environ.get("JOB_DB_PATH", "/data/jobs.db")
 TWO_LEGGED_DEBUG = os.environ.get("TWO_LEGGED_DEBUG", "").lower() == "true"
 DEBUG_EMAIL = os.environ.get("DEBUG_EMAIL", "debug@example.com")
-DEBUG_USER_ID = os.environ.get("DEBUG_USER_ID")  # optional override for two-legged
 VERBOSE_PROGRESS = os.environ.get("VERBOSE_PROGRESS", "").lower() == "true"
 
 # WebSocket subscriber registry: job_id -> list[queue.Queue]
@@ -402,20 +401,34 @@ def build_recap(payload):
 
     sc, auth = create_schoology_client(access_token, access_token_secret, two_legged=payload.get("two_legged", False))
 
-    me = sc.get_me()
-    user_id = getattr(me, "uid", None)
-    if TWO_LEGGED_DEBUG and DEBUG_USER_ID:
-        user_id = DEBUG_USER_ID
+    # Determine user_id robustly; allow debug override
+    me = None
+    try:
+        me = sc.get_me()
+    except Exception:
+        me = None
+    user_id = getattr(me, "uid", None) if me else None
     schoology_user = {
         "id": user_id,
-        "name": getattr(me, "name_display", ""),
-        "email": user_email or getattr(me, "primary_email", ""),
+        "name": getattr(me, "name_display", "") if me else "",
+        "email": user_email or (getattr(me, "primary_email", "") if me else ""),
     }
     notify_progress(job_id, {"status": "running", "stage": "me", "user_id": user_id})
 
     # Data buckets
-    sections_raw = paginated_list(auth, f"users/{user_id}/sections", key="section")
+    sections_raw = []
+    if user_id:
+        try:
+            sections_raw = paginated_list(auth, f"users/{user_id}/sections", key="section")
+        except Exception:
+            sections_raw = []
     sections = [to_obj(s) for s in sections_raw]
+    if not sections:
+        try:
+            sections = sc.get_sections() or []
+        except Exception:
+            sections = []
+
     notify_progress(job_id, {"status": "running", "stage": "sections", "count": len(sections)})
 
     # Enrollment cache for classmate counts (paged)
@@ -547,7 +560,7 @@ def build_recap(payload):
     total_subs = weekend_subs + weekday_subs or 1
     night_pct = round((night_owl_subs / total_subs) * 100, 1)
 
-    # Procrastination metrics
+    # Procrastination metrics (debug script aligned)
     deltas = []
     early_birds = 0
     late_submissions = 0
@@ -556,64 +569,42 @@ def build_recap(payload):
         assignment = assignment_lookup.get(str(getattr(sub, "_assignment_id", "")))
         due = parse_dt(getattr(assignment, "due", None)) if assignment else None
         submitted = parse_dt(getattr(sub, "submitted", None)) or parse_dt(getattr(sub, "created", None))
-        if not due or not submitted:
+        if not submitted:
             continue
-        delta = due - submitted
-        is_on_time = submitted <= due and not getattr(sub, "late", False)
+        aid = str(getattr(assignment, "id", "")) if assignment else ""
+        if aid in missing_ids:
+            continue
+        is_late_flag = bool(getattr(sub, "late", False))
+        is_late = (submitted and due and submitted > due) or is_late_flag
+        is_on_time = not is_late
         on_time_flags.append(is_on_time)
 
-        if is_on_time:
+        if is_on_time and due:
+            delta = due - submitted
             deltas.append(delta)
             if delta >= timedelta(hours=48):
                 early_birds += 1
-        else:
-            # Only count late if revision flagged late or submitted after due
-            late_flag = bool(getattr(sub, "late", False))
-            if late_flag or submitted > due:
-                late_submissions += 1
+        if is_late:
+            late_submissions += 1
 
     avg_procrastination = None
     if deltas:
         avg_procrastination = sum(deltas, timedelta()) / len(deltas)
 
-    # Missing assignments (must have grade present and no submission)
+    # Missing assignments (debug script aligned): allow_dropbox==1 and no submission for this user
     missing = 0
     missing_per_course = defaultdict(int)
     submitted_assignment_ids = set(latest_submissions.keys())
-
-    # Build a grade lookup using get_grades (per section)
-    try:
-        for section in sections:
-            try:
-                grades = sc.get_grades(section_id=section.id)
-                for g in grades or []:
-                    aid = str(getattr(g, "assignment_id", ""))
-                    grade_val = getattr(g, "grade", None)
-                    if aid and grade_val is not None:
-                        try:
-                            grades_lookup[aid] = float(grade_val)
-                        except Exception:
-                            continue
-            except Exception:
-                continue
-    except Exception:
-        pass
-
+    missing_ids = set()
     for section in sections:
         assigns = assignments_by_section.get(section.id, [])
         for a in assigns:
             aid = str(getattr(a, "id", ""))
-            due = parse_dt(getattr(a, "due", None))
-            # Grade presence
-            grade_value = grades_lookup.get(aid)
-            if (
-                due
-                and due < now
-                and aid not in submitted_assignment_ids
-                and grade_value is not None
-            ):
+            allow_dropbox = str(getattr(a, "allow_dropbox", "1")) == "1"
+            if allow_dropbox and aid not in submitted_assignment_ids:
                 missing += 1
                 missing_per_course[section.id] += 1
+                missing_ids.add(aid)
 
     most_missing_course = None
     if missing_per_course:
@@ -762,7 +753,7 @@ def build_recap(payload):
     add_slide(
         "Missing Watch",
         missing,
-        "missing assignments (and you didn't turn these ones in...)",
+        "missing assignments (and you didn't turn these ones in...)" if missing else "No missing assignments!",
     )
 
     # Most missing course with percent within that course
