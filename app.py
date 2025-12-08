@@ -28,6 +28,7 @@ from flask import (
     jsonify,
     session,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Optional dotenv load for local dev
 try:
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)  # trust reverse proxy for scheme/host
 
 # Config
 SCHOOLOGY_CONSUMER_KEY = os.environ.get("SCHOOLOGY_CONSUMER_KEY")
@@ -59,7 +61,6 @@ if not SCHOOLOGY_CONSUMER_KEY or not SCHOOLOGY_CONSUMER_SECRET:
     logger.warning("Schoology consumer key/secret missing; OAuth will fail.")
 
 # In-memory stores (MVP). For durability, swap to SQLite/Redis.
-request_tokens = {}  # oauth_token -> request_token_secret
 jobs = {}  # job_id -> job dict
 
 job_queue: queue.Queue = queue.Queue()
@@ -554,8 +555,8 @@ def auth_start():
     )
     url = auth.request_authorization(callback_url=callback_url)
     if auth.request_token and auth.request_token_secret:
-        request_tokens[auth.request_token] = auth.request_token_secret
         session["request_token"] = auth.request_token
+        session["request_token_secret"] = auth.request_token_secret
     return redirect(url)
 
 
@@ -565,8 +566,9 @@ def auth_callback():
     if not oauth_token:
         return redirect(url_for("index", error="missing_oauth_token"))
 
-    req_secret = request_tokens.pop(oauth_token, None) or session.pop("request_token", None)
-    if not req_secret:
+    req_token = session.pop("request_token", None)
+    req_secret = session.pop("request_token_secret", None)
+    if not req_token or oauth_token != req_token or not req_secret:
         return redirect(url_for("index", error="missing_request_secret"))
 
     auth = schoolopy.Auth(
