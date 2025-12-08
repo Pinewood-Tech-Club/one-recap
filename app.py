@@ -307,7 +307,7 @@ def build_recap(payload):
 
     me = sc.get_me()
     user_id = getattr(me, "uid", None)
-    jobs[job_id]["schoology_user"] = {
+    schoology_user = {
         "id": user_id,
         "name": getattr(me, "name_display", ""),
         "email": user_email or getattr(me, "primary_email", ""),
