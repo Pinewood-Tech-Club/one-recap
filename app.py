@@ -488,6 +488,21 @@ def build_recap(payload):
             assignment_lookup[str(a.id)] = a
 
     # Metrics ---------------------------------------------------------------
+    # Missing assignments (debug_missing_late logic): allow_dropbox == 1 AND no submission for this user
+    missing = 0
+    missing_per_course = defaultdict(int)
+    submitted_assignment_ids = set(latest_submissions.keys())
+    missing_ids = set()
+    for section in sections:
+        assigns = assignments_by_section.get(section.id, [])
+        for a in assigns:
+            aid = str(getattr(a, "id", ""))
+            allow_dropbox = str(getattr(a, "allow_dropbox", "1")) == "1"
+            if allow_dropbox and aid not in submitted_assignment_ids:
+                missing += 1
+                missing_per_course[section.id] += 1
+                missing_ids.add(aid)
+
     # Busiest month
     month_counts = defaultdict(int)
     for assigns in assignments_by_section.values():
@@ -709,9 +724,10 @@ def build_recap(payload):
         total_hours = td.total_seconds() / 3600
         if total_hours >= 48:
             return f"{total_hours/24:.1f} days"
-        if total_hours >= 1:
+        if total_hours >= 0:
             return f"{total_hours:.0f} hours"
-        return f"{total_hours*60:.0f} minutes"
+        if total_hours < 0:
+            return f"{total_hours:.0f} hours"
 
     if avg_procrastination is not None:
         delta_text = format_delta(avg_procrastination)
@@ -735,10 +751,12 @@ def build_recap(payload):
         f"assignments submitted more than 48 hours early... that's {early_pct}% of assignments!",
     )
 
+    total_submissions = len(latest_submissions) or 1
+    late_pct = round((late_submissions / total_submissions) * 100, 1)
     add_slide(
         "Late Ledger",
         late_submissions,
-        "late submissions (at least you turned them in eventually?)",
+        f"late submissions... that's {late_pct}% of assignments!",
     )
 
     add_slide(
