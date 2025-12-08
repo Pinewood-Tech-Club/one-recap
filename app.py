@@ -17,6 +17,7 @@ import json
 import sqlite3
 import threading
 import time
+import queue
 from datetime import datetime, timedelta
 from collections import defaultdict
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from flask import (
     session,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
+from flask_sock import Sock
 
 # Optional dotenv load for local dev
 try:
@@ -52,6 +54,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)  # trust reverse proxy for scheme/host
+sock = Sock(app)
 
 # Config
 SCHOOLOGY_CONSUMER_KEY = os.environ.get("SCHOOLOGY_CONSUMER_KEY")
@@ -59,6 +62,13 @@ SCHOOLOGY_CONSUMER_SECRET = os.environ.get("SCHOOLOGY_CONSUMER_SECRET")
 SCHOOLOGY_DOMAIN = os.environ.get("SCHOOLOGY_DOMAIN", "https://app.schoology.com")
 SCHOOLOGY_API_DOMAIN = os.environ.get("SCHOOLOGY_API_DOMAIN", "https://api.schoology.com")
 JOB_DB_PATH = os.environ.get("JOB_DB_PATH", "/data/jobs.db")
+TWO_LEGGED_DEBUG = os.environ.get("TWO_LEGGED_DEBUG", "").lower() == "true"
+DEBUG_EMAIL = os.environ.get("DEBUG_EMAIL", "debug@example.com")
+DEBUG_USER_ID = os.environ.get("DEBUG_USER_ID")  # optional override for two-legged
+VERBOSE_PROGRESS = os.environ.get("VERBOSE_PROGRESS", "").lower() == "true"
+
+# WebSocket subscriber registry: job_id -> list[queue.Queue]
+subscribers: dict[str, list[queue.Queue]] = {}
 
 if not SCHOOLOGY_CONSUMER_KEY or not SCHOOLOGY_CONSUMER_SECRET:
     logger.warning("Schoology consumer key/secret missing; OAuth will fail.")
@@ -76,11 +86,20 @@ def init_job_db():
             email TEXT,
             access_token TEXT,
             access_token_secret TEXT,
+            two_legged INTEGER DEFAULT 0,
             slides_json TEXT,
+            progress_json TEXT,
             error TEXT
         )
         """
     )
+    # Add two_legged column if missing (migration-friendly)
+    cur.execute("PRAGMA table_info(jobs)")
+    cols = [row[1] for row in cur.fetchall()]
+    if "two_legged" not in cols:
+        cur.execute("ALTER TABLE jobs ADD COLUMN two_legged INTEGER DEFAULT 0")
+    if "progress_json" not in cols:
+        cur.execute("ALTER TABLE jobs ADD COLUMN progress_json TEXT")
     conn.commit()
     conn.close()
 
@@ -94,13 +113,13 @@ def get_conn():
     return sqlite3.connect(JOB_DB_PATH, check_same_thread=False)
 
 
-def create_job(job_id, email, access_token, access_token_secret):
+def create_job(job_id, email, access_token, access_token_secret, two_legged: bool = False):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO jobs (id, status, created_at, email, access_token, access_token_secret, slides_json, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (id, status, created_at, email, access_token, access_token_secret, two_legged, slides_json, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             job_id,
@@ -109,6 +128,7 @@ def create_job(job_id, email, access_token, access_token_secret):
             email,
             access_token,
             access_token_secret,
+            1 if two_legged else 0,
             None,
             None,
         ),
@@ -117,12 +137,12 @@ def create_job(job_id, email, access_token, access_token_secret):
     conn.close()
 
 
-def update_job_status(job_id, status, error=None):
+def update_job_status(job_id, status, error=None, progress: dict | None = None):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE jobs SET status = ?, error = ? WHERE id = ?",
-        (status, error, job_id),
+        "UPDATE jobs SET status = ?, error = ?, progress_json = ? WHERE id = ?",
+        (status, error, json.dumps(progress) if progress else None, job_id),
     )
     conn.commit()
     conn.close()
@@ -132,18 +152,20 @@ def save_job_result(job_id, slides):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE jobs SET slides_json = ?, status = ? WHERE id = ?",
-        (json.dumps(slides), "done", job_id),
+        "UPDATE jobs SET slides_json = ?, status = ?, progress_json = ? WHERE id = ?",
+        (json.dumps(slides), "done", None, job_id),
     )
     conn.commit()
     conn.close()
+
+    notify_progress(job_id, {"status": "done", "slides": slides})
 
 
 def fetch_job(job_id):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, status, created_at, email, slides_json, error FROM jobs WHERE id = ?",
+        "SELECT id, status, created_at, email, slides_json, error, progress_json FROM jobs WHERE id = ?",
         (job_id,),
     )
     row = cur.fetchone()
@@ -151,6 +173,7 @@ def fetch_job(job_id):
     if not row:
         return None
     slides = json.loads(row[4]) if row[4] else None
+    progress = json.loads(row[6]) if row[6] else None
     return {
         "id": row[0],
         "status": row[1],
@@ -158,7 +181,18 @@ def fetch_job(job_id):
         "email": row[3],
         "slides": slides,
         "error": row[5],
+        "progress": progress,
     }
+
+
+def notify_progress(job_id: str, payload: dict):
+    """Notify WebSocket subscribers and persist progress snapshot."""
+    # push to subscribers
+    subs = subscribers.get(job_id, [])
+    for q in subs:
+        q.put(payload)
+    # persist snapshot
+    update_job_status(job_id, status=payload.get("status", "running"), progress=payload)
 
 
 def claim_next_job():
@@ -180,7 +214,7 @@ def claim_next_job():
     )
     if cur.rowcount == 1:
         cur.execute(
-            "SELECT id, email, access_token, access_token_secret FROM jobs WHERE id = ?",
+            "SELECT id, email, access_token, access_token_secret, two_legged FROM jobs WHERE id = ?",
             (job_id,),
         )
         job_row = cur.fetchone()
@@ -191,6 +225,7 @@ def claim_next_job():
             "email": job_row[1],
             "access_token": job_row[2],
             "access_token_secret": job_row[3],
+            "two_legged": bool(job_row[4]),
         }
     conn.commit()
     conn.close()
@@ -207,21 +242,22 @@ def worker():
         job_id = job["id"]
         logger.info("Processing job %s", job_id)
         try:
-            update_job_status(job_id, "running")
+            notify_progress(job_id, {"status": "running", "message": "Starting job"})
             slides = build_recap(
                 {
                     "job_id": job_id,
                     "access_token": job["access_token"],
                     "access_token_secret": job["access_token_secret"],
                     "email": job["email"],
+                    "two_legged": job.get("two_legged", False),
                 }
             )
             save_job_result(job_id, slides)
-            update_job_status(job_id, "done")
             # TODO: send SES email here with link to /recap?id={job_id}
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Job %s failed", job_id)
             update_job_status(job_id, "error", error=str(exc))
+            notify_progress(job_id, {"status": "error", "error": str(exc)})
 
 
 worker_thread = threading.Thread(target=worker, daemon=True)
@@ -229,32 +265,93 @@ worker_thread.start()
 
 
 # Helpers -------------------------------------------------------------------
-def create_schoology_client(access_token: str, access_token_secret: str):
-    """Create an authenticated Schoology client from access tokens."""
+def create_schoology_client(access_token: str | None, access_token_secret: str | None, two_legged: bool = False):
+    """Create a Schoology client. Supports two-legged debug mode when flagged."""
     auth = schoolopy.Auth(
         SCHOOLOGY_CONSUMER_KEY,
         SCHOOLOGY_CONSUMER_SECRET,
-        three_legged=True,
+        three_legged=not two_legged,
         domain=SCHOOLOGY_DOMAIN,
         access_token=access_token,
         access_token_secret=access_token_secret,
     )
-    # schoolopy Auth __init__ sets oauth with only consumer creds; rebuild with access tokens
-    auth.oauth = requests_oauthlib.OAuth1Session(
-        SCHOOLOGY_CONSUMER_KEY,
-        client_secret=SCHOOLOGY_CONSUMER_SECRET,
-        resource_owner_key=access_token,
-        resource_owner_secret=access_token_secret,
-    )
+    if two_legged:
+        auth.oauth = requests_oauthlib.OAuth1Session(
+            SCHOOLOGY_CONSUMER_KEY,
+            client_secret=SCHOOLOGY_CONSUMER_SECRET,
+        )
+    else:
+        # schoolopy Auth __init__ sets oauth with only consumer creds; rebuild with access tokens
+        auth.oauth = requests_oauthlib.OAuth1Session(
+            SCHOOLOGY_CONSUMER_KEY,
+            client_secret=SCHOOLOGY_CONSUMER_SECRET,
+            resource_owner_key=access_token,
+            resource_owner_secret=access_token_secret,
+        )
     sc = schoolopy.Schoology(auth)
     sc.limit = 200  # reduce pagination pressure where honored
     return sc, auth
 
 
+def get_latest_user_submission(sc, auth, section_id: str, assignment_id: str, user_id: str):
+    """
+    Fetch latest submission for a user on an assignment.
+    Uses submissions/revisions endpoint with all_revisions.
+    """
+    if not user_id:
+        return None
+    subs = []
+
+    # Primary endpoint: list revisions for assignment, filter by uid
+    try:
+        url = f"{SCHOOLOGY_API_DOMAIN}/v1/sections/{section_id}/submissions/{assignment_id}/?all_revisions=true&with_attachments=true"
+        resp = auth.oauth.get(url)
+        if resp.status_code == 200:
+            data = resp.json() or {}
+            revs = data.get("revision") or []
+            subs = [to_obj(r) for r in revs if str(r.get("uid", "")) == str(user_id)]
+    except Exception:
+        subs = []
+
+    # Fallback: user-specific revision endpoint
+    if not subs:
+        try:
+            url = f"{SCHOOLOGY_API_DOMAIN}/v1/sections/{section_id}/submissions/{assignment_id}/{user_id}?all_revisions=true&with_attachments=true"
+            resp = auth.oauth.get(url)
+            if resp.status_code == 200:
+                data = resp.json() or {}
+                revs = data.get("revision") or data.get("submission") or []
+                if isinstance(revs, dict) and "revision" in revs:
+                    revs = revs["revision"]
+                subs = [to_obj(r) for r in revs] if isinstance(revs, list) else []
+        except Exception:
+            subs = []
+
+    def sub_timestamp(sub_obj):
+        ts = parse_dt(getattr(sub_obj, "submitted", None)) or parse_dt(getattr(sub_obj, "created", None))
+        return ts or datetime.min
+
+    latest = None
+    if subs:
+        latest = max(subs, key=sub_timestamp)
+    return latest
+
+
 def parse_dt(value):
-    """Parse Schoology datetime string to naive datetime; return None on failure."""
+    """Parse Schoology datetime (string or epoch) to naive datetime; return None on failure."""
     if not value:
         return None
+    # epoch int/str
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.utcfromtimestamp(float(value))
+        except Exception:
+            pass
+    if isinstance(value, str) and value.isdigit():
+        try:
+            return datetime.utcfromtimestamp(float(value))
+        except Exception:
+            pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
             return datetime.strptime(value, fmt)
@@ -303,19 +400,23 @@ def build_recap(payload):
     access_token_secret = payload["access_token_secret"]
     user_email = payload.get("email")
 
-    sc, auth = create_schoology_client(access_token, access_token_secret)
+    sc, auth = create_schoology_client(access_token, access_token_secret, two_legged=payload.get("two_legged", False))
 
     me = sc.get_me()
     user_id = getattr(me, "uid", None)
+    if TWO_LEGGED_DEBUG and DEBUG_USER_ID:
+        user_id = DEBUG_USER_ID
     schoology_user = {
         "id": user_id,
         "name": getattr(me, "name_display", ""),
         "email": user_email or getattr(me, "primary_email", ""),
     }
+    notify_progress(job_id, {"status": "running", "stage": "me", "user_id": user_id})
 
     # Data buckets
     sections_raw = paginated_list(auth, f"users/{user_id}/sections", key="section")
     sections = [to_obj(s) for s in sections_raw]
+    notify_progress(job_id, {"status": "running", "stage": "sections", "count": len(sections)})
 
     # Enrollment cache for classmate counts (paged)
     section_enrollments = {}
@@ -327,8 +428,11 @@ def build_recap(payload):
             section_enrollments[section.id] = []
 
     assignments_by_section = defaultdict(list)
-    submissions = []
+    grades_lookup = {}  # assignment_id -> grade (float)
+    # Store only the latest submission per assignment for this user
+    latest_submissions: dict[str, SimpleNamespace] = {}
     section_lookup = {}
+    processed_assignments = 0
 
     for section in sections:
         section_lookup[section.id] = section
@@ -347,11 +451,31 @@ def build_recap(payload):
                     )
                 except Exception:
                     subs_raw = []
-                for sub in subs_raw or []:
-                    sub_obj = to_obj(sub)
-                    sub_obj._section_id = section.id  # noqa: SLF001
-                    sub_obj._assignment_id = assignment.id  # noqa: SLF001
-                    submissions.append(sub_obj)
+                # Filter to the current user and keep the latest submission
+                latest = get_latest_user_submission(sc, auth, section.id, assignment.id, user_id)
+                if latest:
+                    latest._section_id = section.id  # noqa: SLF001
+                    latest._assignment_id = assignment.id  # noqa: SLF001
+                    latest_submissions[str(assignment.id)] = latest
+                if VERBOSE_PROGRESS:
+                    logger.info(
+                        "Assignment processed %s / section %s / subs_seen=%s / latest_for_user=%s",
+                        getattr(assignment, "title", ""),
+                        getattr(section, "course_title", ""),
+                        len(subs_raw or []),
+                        str(str(assignment.id) in latest_submissions),
+                    )
+                processed_assignments += 1
+                if processed_assignments % 10 == 0:
+                    notify_progress(
+                        job_id,
+                        {
+                            "status": "running",
+                            "stage": "assignments",
+                            "section": getattr(section, "course_title", ""),
+                            "processed": processed_assignments,
+                        },
+                    )
         except Exception as e:  # pylint: disable=broad-except
             logger.warning("Failed assignments for section %s: %s", getattr(section, "id", "?"), e)
             continue
@@ -394,8 +518,8 @@ def build_recap(payload):
 
     # Weekend / Weekday / Night owl
     weekend_subs = weekday_subs = night_owl_subs = 0
-    for sub in submissions:
-        submitted = parse_dt(getattr(sub, "created", None)) or parse_dt(getattr(sub, "submitted", None))
+    for sub in latest_submissions.values():
+        submitted = parse_dt(getattr(sub, "submitted", None)) or parse_dt(getattr(sub, "created", None))
         if not submitted:
             continue
         if submitted.weekday() >= 5:
@@ -413,34 +537,66 @@ def build_recap(payload):
     early_birds = 0
     late_submissions = 0
     on_time_flags = []
-    for sub in submissions:
+    for sub in latest_submissions.values():
         assignment = assignment_lookup.get(str(getattr(sub, "_assignment_id", "")))
         due = parse_dt(getattr(assignment, "due", None)) if assignment else None
-        submitted = parse_dt(getattr(sub, "created", None)) or parse_dt(getattr(sub, "submitted", None))
+        submitted = parse_dt(getattr(sub, "submitted", None)) or parse_dt(getattr(sub, "created", None))
         if not due or not submitted:
             continue
         delta = due - submitted
-        deltas.append(delta)
-        on_time_flags.append(submitted <= due and not getattr(sub, "late", False))
-        if delta >= timedelta(hours=48):
-            early_birds += 1
-        if submitted > due or getattr(sub, "late", False):
-            late_submissions += 1
+        is_on_time = submitted <= due and not getattr(sub, "late", False)
+        on_time_flags.append(is_on_time)
+
+        if is_on_time:
+            deltas.append(delta)
+            if delta >= timedelta(hours=48):
+                early_birds += 1
+        else:
+            # Only count late if revision flagged late or submitted after due
+            late_flag = bool(getattr(sub, "late", False))
+            if late_flag or submitted > due:
+                late_submissions += 1
 
     avg_procrastination = None
     if deltas:
         avg_procrastination = sum(deltas, timedelta()) / len(deltas)
 
-    # Missing assignments
+    # Missing assignments (must have grade present and no submission)
     missing = 0
     missing_per_course = defaultdict(int)
-    submitted_assignment_ids = {str(getattr(sub, "_assignment_id", "")) for sub in submissions}
+    submitted_assignment_ids = set(latest_submissions.keys())
+
+    # Build a grade lookup using get_grades (per section)
+    try:
+        for section in sections:
+            try:
+                grades = sc.get_grades(section_id=section.id)
+                for g in grades or []:
+                    aid = str(getattr(g, "assignment_id", ""))
+                    grade_val = getattr(g, "grade", None)
+                    if aid and grade_val is not None:
+                        try:
+                            grades_lookup[aid] = float(grade_val)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     for section in sections:
         assigns = assignments_by_section.get(section.id, [])
         for a in assigns:
+            aid = str(getattr(a, "id", ""))
             due = parse_dt(getattr(a, "due", None))
-            # count as missing if past due and no submission
-            if due and due < now and str(getattr(a, "id", "")) not in submitted_assignment_ids:
+            # Grade presence
+            grade_value = grades_lookup.get(aid)
+            if (
+                due
+                and due < now
+                and aid not in submitted_assignment_ids
+                and grade_value is not None
+            ):
                 missing += 1
                 missing_per_course[section.id] += 1
 
@@ -475,10 +631,10 @@ def build_recap(payload):
         peak_week = max(week_counts.items(), key=lambda x: x[1])
         drought_week = min(week_counts.items(), key=lambda x: x[1])
 
-    # Attachment stats
+    # Attachment stats (latest submissions only)
     total_files = 0
     max_file_size = 0
-    for sub in submissions:
+    for sub in latest_submissions.values():
         attachments = getattr(sub, "attachments", None)
         if attachments and hasattr(attachments, "files") and getattr(attachments.files, "file", None):
             files = attachments.files.file
@@ -508,7 +664,7 @@ def build_recap(payload):
             if str(getattr(enr, "uid", "")) == str(user_id):
                 continue
             classmate_counts[enr.uid]["count"] += 1
-            classmate_counts[enr.uid]["sections"].add(getattr(section, "section_title", ""))
+            classmate_counts[enr.uid]["sections"].add(getattr(section, "course_title", ""))
             classmate_counts[enr.uid]["name"] = getattr(enr, "name_display", f"User {enr.uid}")
 
     top_classmates = sorted(classmate_counts.items(), key=lambda x: x[1]["count"], reverse=True)[:5]
@@ -571,7 +727,7 @@ def build_recap(payload):
     else:
         add_slide("Average Procrastination", "—", "No submissions with due dates.")
 
-    total_submissions = len(submissions) or 1
+    total_submissions = len(latest_submissions) or 1
     early_pct = round((early_birds / total_submissions) * 100, 1)
     add_slide(
         "Early Bird",
@@ -680,6 +836,11 @@ def index():
 @app.route("/auth/start")
 def auth_start():
     """Kick off Schoology OAuth."""
+    if TWO_LEGGED_DEBUG:
+        job_id = str(uuid.uuid4())
+        create_job(job_id, DEBUG_EMAIL, None, None, two_legged=True)
+        return redirect(url_for("recap_view", id=job_id))
+
     if not SCHOOLOGY_CONSUMER_KEY or not SCHOOLOGY_CONSUMER_SECRET:
         return "Missing Schoology API keys. Set SCHOOLOGY_CONSUMER_KEY/SECRET.", 500
 
@@ -754,6 +915,29 @@ def job_status(job_id):
     if not job:
         return jsonify({"error": "not_found"}), 404
     return jsonify(job)
+
+
+# WebSocket for live progress updates
+@sock.route("/ws/job/<job_id>")
+def job_ws(ws, job_id):
+    # send initial state
+    job = fetch_job(job_id)
+    if job:
+        ws.send(json.dumps(job))
+    # subscribe
+    q = queue.Queue()
+    subscribers.setdefault(job_id, []).append(q)
+    try:
+        while True:
+            payload = q.get()
+            ws.send(json.dumps(payload))
+    except Exception:
+        pass
+    finally:
+        # cleanup
+        subs = subscribers.get(job_id, [])
+        if q in subs:
+            subs.remove(q)
 
 
 if __name__ == "__main__":

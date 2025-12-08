@@ -215,35 +215,70 @@
     const next = () => { current = (current + 1) % slides.length; render(); };
     const prev = () => { current = (current - 1 + slides.length) % slides.length; render(); };
 
-    async function poll() {
+    let pollTimer = null;
+
+    async function pollOnce() {
+      try {
+        const res = await fetch(`/api/job/${jobId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.slides) {
+          slides = data.slides;
+          render();
+          statusEl.textContent = "Recap ready!";
+          if (pollTimer) clearInterval(pollTimer);
+        } else {
+          const stage = data.progress && data.progress.stage ? ` • ${data.progress.stage}` : "";
+          statusEl.textContent = `Generating your recap... ${data.status || ""}${stage}`;
+        }
+      } catch (_) {
+        // ignore
+      }
+    }
+
+    function startPollingFallback() {
+      if (pollTimer) return;
+      pollTimer = setInterval(pollOnce, 2500);
+      pollOnce();
+    }
+
+    function connectWS() {
       if (!jobId) {
         statusEl.textContent = "No recap ID provided.";
         return;
       }
-      try {
-        const res = await fetch(`/api/job/${jobId}`);
-        if (!res.ok) throw new Error("Failed to fetch job");
-        const data = await res.json();
-        if (data.status === "done" && Array.isArray(data.slides)) {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/job/${jobId}`);
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.slides) {
           slides = data.slides;
-          if (slides.length === 0) {
-            statusEl.textContent = "No data to show yet.";
-            return;
-          }
           render();
         } else if (data.status === "error") {
           statusEl.textContent = "Something went wrong: " + (data.error || "unknown error");
+        } else if (data.status === "done") {
+          statusEl.textContent = "Recap ready!";
+          startPollingFallback(); // fetch slides if not included
         } else {
-          statusEl.textContent = "Generating your recap... (status: " + data.status + ")";
-          setTimeout(poll, 2500);
+          const stage = data.stage ? ` • ${data.stage}` : "";
+          statusEl.textContent = `Generating your recap... ${data.status}${stage}`;
         }
-      } catch (err) {
-        statusEl.textContent = "Error loading recap.";
-        console.error(err);
-      }
+      };
+      ws.onerror = () => {
+        statusEl.textContent = "WebSocket error. Falling back to polling.";
+        startPollingFallback();
+      };
+      ws.onclose = () => {
+        // if we didn't get slides yet, fall back
+        if (!slides.length) {
+          statusEl.textContent = "Connection closed. Falling back to polling.";
+          startPollingFallback();
+        }
+      };
+      ws.onopen = () => { statusEl.textContent = "Connected. Generating your recap..."; };
     }
 
-    poll();
+    connectWS();
     document.addEventListener("keydown", (e) => {
       if (!slides.length) return;
       if (e.key === "ArrowRight" || e.key === " ") next();

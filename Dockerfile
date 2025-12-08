@@ -22,5 +22,5 @@ COPY . .
 
 EXPOSE 5002
 
-# Use a single worker so in-memory job state remains consistent across requests.
-CMD ["gunicorn", "-b", "0.0.0.0:5002", "-w", "1", "--access-logfile", "-", "--error-logfile", "-", "--capture-output", "--log-level", "info", "app:app"]
+# Use gevent worker to support WebSockets and keep single worker for SQLite.
+CMD ["gunicorn", "-b", "0.0.0.0:5002", "-w", "1", "-k", "gevent", "--access-logfile", "-", "--error-logfile", "-", "--capture-output", "--log-level", "info", "app:app"]
