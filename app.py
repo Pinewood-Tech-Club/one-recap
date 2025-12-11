@@ -594,14 +594,14 @@ def build_recap(payload):
     # Missing assignments (debug script aligned): allow_dropbox==1 and no submission for this user
     missing = 0
     missing_per_course = defaultdict(int)
-    submitted_assignment_ids = set(latest_submissions.keys())
     missing_ids = set()
     for section in sections:
         assigns = assignments_by_section.get(section.id, [])
         for a in assigns:
             aid = str(getattr(a, "id", ""))
             allow_dropbox = str(getattr(a, "allow_dropbox", "1")) == "1"
-            if allow_dropbox and aid not in submitted_assignment_ids:
+            latest = get_latest_user_submission(sc, auth, section.id, aid, user_id)
+            if allow_dropbox and not latest:
                 missing += 1
                 missing_per_course[section.id] += 1
                 missing_ids.add(aid)
