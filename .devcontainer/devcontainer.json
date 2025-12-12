@@ -1,0 +1,22 @@
+{
+  "name": "recap",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  
+  "postCreateCommand": "pip install -r requirements.txt",
+  
+  // Forward ports automatically
+  "forwardPorts": [5002],
+  
+  // VS Code extensions to install
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "editor.formatOnSave": true
+      }
+    }
+  }
+}
