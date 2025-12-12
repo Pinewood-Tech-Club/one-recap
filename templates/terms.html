@@ -1,0 +1,35 @@
+{% extends "layout.html" %}
+{% block title %}Schoology Recap - Terms{% endblock %}
+{% block content %}
+  <div class="card">
+    <a class="button" href="{{ url_for('index') }}" style="margin-bottom: 24px;">Back Home</a>
+    <h1>Schoology Recap Terms</h1>
+    <h2>Presented by the <span style="color: var(--accent); font-weight: 700;">Pinewood Tech Club</span></h2>
+    <p>Schoology Recap is a really basic project built by students for students. As such, we treat your data with the utmost care and respect.</p>
+    <p>By generating your recap, you agree that we will use your data to:</p>
+    <p>
+        <ul>
+            <li>Process assignment data to generate your recap</li>
+            <li>Email you when your recap is ready and for other Tech Club news</li>
+            <li>To create anonymous aggregate statistics about student behavior</li>
+            <li>To record anonymous telemetry data to improve our product</li>
+        </ul>
+    </p>
+    <p>The Pinewood Tech club will <u>not</u>:</p>
+    <p>
+        <ul>
+            <li>Store any of your Schoology data other than the generated statistics that are displayed in your recap</li>
+            <li>Sell or share your data with any third parties beyond the services that we use to provide our service (listed below)</li>
+            <li>Access data that is not relevant to the service (we access submission time only, not content)</li>
+        </ul>
+    </p>
+    <p>In order to run our service, we rely on select third-party services for certain functionality. Data sent to these services are subject to their respective terms of service and privacy policies.</p>
+    <ul>
+        <li><a href="https://aws.amazon.com/">Amazon Web Services</a> for hosting and email delivery. AWS receives: your email address, assignment metadata (submission times, course names, grades), and generated recap statistics. <a href="https://aws.amazon.com/privacy/">Privacy Policy</a></li>
+        <li><a href="https://cloudflare.com/">Cloudflare</a> for DNS services. Cloudflare may receive your IP address during DNS lookups. <a href="https://www.cloudflare.com/privacypolicy/">Privacy Policy</a></li>
+        <li><a href="https://schoology.com/">Schoology</a> for accessing your assignment data via their API. <a href="https://www.schoology.com/privacy">Privacy Policy</a></li>
+    </ul>
+
+    <p>If you have any questions or concerns about our terms, please contact us at <a href="mailto:techclub@pinewood.edu">techclub@pinewood.edu</a>. We are always happy to answer any clarification questions. Thank you for using Schoology Recap!</p>
+  </div>
+{% endblock %}

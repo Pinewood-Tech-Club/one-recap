@@ -1,70 +1,33 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Schoology Recap</title>
-  <style>
-    :root {
-      --bg: #0f172a;
-      --card: #111827;
-      --accent: #22d3ee;
-      --text: #e5e7eb;
-      --muted: #94a3b8;
-    }
-    body {
-      margin: 0;
-      font-family: "Inter", system-ui, -apple-system, sans-serif;
-      background: radial-gradient(circle at 20% 20%, #1f2937, #0b1224 40%);
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-    }
-    .card {
-      background: var(--card);
-      border: 1px solid #1f2937;
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-      border-radius: 20px;
-      padding: 48px;
-      width: min(600px, 92vw);
-      text-align: center;
-    }
-    h1 {
-      font-size: 32px;
-      margin: 0 0 12px 0;
-      letter-spacing: -0.02em;
-    }
-    p {
-      margin: 10px 0 28px 0;
-      color: var(--muted);
-      line-height: 1.6;
-    }
-    a.button {
-      display: inline-block;
-      padding: 14px 22px;
-      background: linear-gradient(120deg, #22d3ee, #14b8a6);
-      color: #0b1224;
-      border-radius: 12px;
-      text-decoration: none;
-      font-weight: 700;
-      letter-spacing: 0.01em;
-      box-shadow: 0 10px 30px rgba(20, 184, 166, 0.3);
-    }
-    .note {
-      margin-top: 16px;
-      font-size: 14px;
-      color: var(--muted);
-    }
-  </style>
-</head>
-<body>
+{% extends "layout.html" %}
+{% block title %}Schoology Recap{% endblock %}
+{% block content %}
   <div class="card">
-    <h1>Your Schoology Recap</h1>
-    <p>Sign in with Schoology to generate a wrapped-style recap from last spring and this fall. We’ll email you when it’s ready.</p>
-    <a class="button" href="{{ url_for('auth_start') }}">Sign in with Schoology</a>
-    <div class="note">No account here—anyone with the recap link can view.</div>
+    <h1>Schoology Recap</h1>
+    <h2>Presented by the <span style="color: var(--accent); font-weight: 700;">Pinewood Tech Club</span></h2>
+    <p>Click below and sign in with your Pinewood Schoology account to get a summary of this semester.</p>
+    <a class="button disabled" onclick="btnClick()">Sign in with Schoology</a>
+    <p><input type="checkbox" id="terms-checkbox" />
+    <label for="terms-checkbox" id="terms-label">I agree to the <a href="/terms">terms</a>.</label></p>
   </div>
-</body>
-</html>
+  <script>
+    document.getElementById('terms-checkbox').addEventListener('change', function() {
+      document.querySelector('.button').classList.toggle('disabled', !this.checked);
+    });
+
+    // move the button onclick function to a separate function
+    function btnClick() {
+      if (document.getElementById('terms-checkbox').checked) {
+        window.location.href = '{{ url_for('auth_start') }}';
+      } else {
+        // blink the terms text label green
+        document.getElementById('terms-label').style.color = 'red';
+        document.getElementById('terms-label').style.fontWeight = 'bold';
+        // cancel other timeouts
+        setTimeout(function() {
+          document.getElementById('terms-label').style.color = 'var(--muted)';
+          document.getElementById('terms-label').style.fontWeight = 'normal';
+        }, 250);
+      }
+    }
+  </script>
+{% endblock %}

@@ -1,0 +1,107 @@
+{
+    "cards": [
+        {
+            "title": "Total assignments",
+            "type": "num_countup",
+            "bg": "#0f172a",
+            "fg": "#e2e8f0",
+            "ac": "#22d3ee",
+            "emj": "📘📗📕📙📓📔📖📚",
+            "desc": "Across %{total_courses} courses",
+            "effect": {
+                "start_num": 0,
+                "end_num": "%{total_assignments}",
+                "step": 1,
+                "emj-effect": "rain"
+            }
+        },
+        {
+            "title": "Busiest month",
+            "type": "text_reveal",
+            "bg": "#fad673",
+            "fg": "#7c2d12",
+            "ac": "#ea580c",
+            "emj": "📅📆🗓️⏰📝",
+            "desc": "With %{assignments_bm} assignments",
+            "effect": {
+                "reveal_scroll_options": [
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December"
+                ],
+                "scroll_duration": 1000,
+                "reveal_text": "%{busiest_month}",
+                "emj-effect": "rain"
+            }
+        },
+        {
+            "title": "Assignments completed over weekends",
+            "type": "num_countup",
+            "bg": "#14532d",
+            "fg": "#ecfdf3",
+            "ac": "#34d399",
+            "emj": "🏠🛋️🌙📄",
+            "desc": "Out of %{total_assignments} assignments",
+            "effect": {
+                "start_num": 0,
+                "end_num": "%{weekend_subs}",
+                "step": 1,
+                "emj-effect": "rain"
+            }
+        },
+        {
+            "title": "Assignments completed over weekdays",
+            "type": "num_countup",
+            "bg": "#1d4ed8",
+            "fg": "#e0f2fe",
+            "ac": "#60a5fa",
+            "emj": "🏫📝📄📚📋⏰",
+            "desc": "Out of %{total_assignments} assignments",
+            "effect": {
+                "start_num": 0,
+                "end_num": "%{weekday_subs}",
+                "step": 1,
+                "emj-effect": "rain"
+            }
+        },
+        {
+            "title": "You submitted assignments",
+            "type": "countup",
+            "bg": "#ed6f66",
+            "fg": "#690814",
+            "ac": "#c42700",
+            "emj": "⏰⏳",
+            "desc": "before the due date on average",
+            "effect": {
+                "start_num": "0 hours",
+                "end_num": "%{avg_procrastination} hours",
+                "step": 0.1,
+                "emj-effect": "fireworks"
+            }
+        },
+        {
+            "title": "Assignments completed past 10pm",
+            "type": "num_countup",
+            "bg": "#000",
+            "fg": "#fff",
+            "ac": "#ffff00",
+            "emj": "🦉",
+            "desc": "Which is %{night_owl_pct}% of all assignments",
+            "effect": {
+                "start_num": 0,
+                "end_num": "%{night_owl_subs}",
+                "step": 1,
+                "emj-effect": "stars"
+            }
+        }
+    ]
+}

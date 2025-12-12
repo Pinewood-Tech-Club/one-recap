@@ -1,289 +1,57 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Your Recap</title>
-  <style>
-    :root {
-      --bg: #0f172a;
-      --card: #111827;
-      --accent: #22d3ee;
-      --text: #e5e7eb;
-      --muted: #94a3b8;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: "Inter", system-ui, -apple-system, sans-serif;
-      overflow: hidden;
-    }
-    .shell {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .slide {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      display: grid;
-      place-items: center;
-      padding: 24px;
-    }
-    .card {
-      width: min(780px, 92vw);
-      background: var(--card);
-      border: 1px solid #1f2937;
-      border-radius: 18px;
-      padding: 32px 40px;
-      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
-    }
-    .title {
-      font-size: 18px;
-      color: var(--muted);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      margin-bottom: 12px;
-    }
-    .big {
-      font-size: 48px;
-      font-weight: 800;
-      margin: 0 0 8px 0;
-      letter-spacing: -0.01em;
-    }
-    .bottom {
-      font-size: 18px;
-      color: var(--muted);
-      line-height: 1.6;
-    }
-    .list {
-      margin-top: 16px;
-      padding: 0;
-      list-style: none;
-      color: var(--text);
-    }
-    .list li {
-      margin: 8px 0;
-      font-size: 16px;
-      color: var(--muted);
-    }
-    .nav {
-      position: absolute;
-      bottom: 24px;
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-    }
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #1f2937;
-      cursor: pointer;
-      transition: transform 150ms ease, background 150ms ease;
-    }
-    .dot.active {
-      background: var(--accent);
-      transform: scale(1.15);
-    }
-    .status {
-      font-size: 18px;
-      color: var(--muted);
-      text-align: center;
-      line-height: 1.6;
-    }
-    .nav-btn {
-      position: absolute;
-      top: 50%;
-      transform: translateY(-50%);
-      background: rgba(17, 24, 39, 0.65);
-      border: 1px solid #1f2937;
-      color: var(--text);
-      padding: 10px 12px;
-      border-radius: 50%;
-      cursor: pointer;
-    }
-    .nav-btn:hover { background: rgba(31, 41, 55, 0.7); }
-    .nav-btn.left { left: 14px; }
-    .nav-btn.right { right: 14px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 12px;
-      margin-top: 20px;
-    }
-    .grid-card {
-      padding: 12px;
-      background: #0b1224;
-      border: 1px solid #1f2937;
-      border-radius: 12px;
-    }
-    .grid-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-    .grid-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
-  </style>
-</head>
-<body>
-  <div class="shell" id="shell">
-    <div class="status" id="status">Loading your recap...</div>
+{% extends "layout.html" %}
+{% block title %}Schoology Recap{% endblock %}
+{% block content %}
+  <div class="sections">
+    <div class="controls-picker-list"></div>
+    <div class="existing-recap hidden">
+      <div class="card">
+        <h1>You already have a recap</h1>
+        <a class="button" onclick="viewExisting()">View Your Recap</a>
+        <p>Or <a onclick="generateNew()">generate a new one</a>.</p>
+        <p class="note">Generating a new recap will replace your existing one and may take a few minutes to complete.</p>
+        <p class="note">Your data is subject to our <a href="/terms">terms</a>.</p>
+      </div>
+    </div>
+    <div class="generating-recap hidden">
+      <div class="card">
+        <h1>We&apos;re putting together your recap</h1>
+        <p>This may take a while. We&apos;ll send you an email when it&apos;s ready, and you can close this tab in the meantime.</p>
+        <p id="status">We&apos;ll have updates here soon...</p>
+        <p class="note">Your data is subject to our <a href="/terms">terms</a>.</p>
+      </div>
+    </div>
+    <div class="recap-title-slide" id="recap-title-slide">
+      <h1 id="title-slide-headline">This is your recap</h1>
+      <p>Explore your academic achievements from your past year and share them with friends!</p>
+      <div class="recap-title-prompts" id="recap-title-prompts"></div>
+    </div>
+    <div class="actual-recap hidden" id="recap-container">
+    </div>
+    <div class="controls title-hidden">
+      <div class="left-side-controls">
+        <h2>Recap <span style="font-size: 10px;">by Tech Club</span></h2>
+        <!-- disable special effects toggle (default on) -->
+        <a class="controls-icon" onclick="toggleEffects()"><img src="/static/icons/fireworks.svg" alt="Effects" height="32" /></a>
+        <a class="controls-icon" onclick="downloadCurrentSlide()"><img src="/static/icons/square.and.arrow.down.svg" alt="Download" height="32" /></a>
+        <a class="controls-icon" onclick="copyShareLink()"><img src="/static/icons/square.and.arrow.up.svg" alt="Copy Link" height="32" /></a>
+      </div>
+      <div class="slide-picker">
+        <a class="controls-icon" onclick="prevslide()"><img src="/static/icons/chevron.left.svg" alt="Previous" height="32" /></a>
+        <span class="controls-picker"></span>
+        <a class="controls-icon" onclick="nextslide()"><img src="/static/icons/chevron.right.svg" alt="Next" height="32" /></a>
+      </div>
+    </div>
+    <div class="helper" id="helper-container">
+      <!-- We will use this when user wants to download an image of their recap -->
+      <canvas id="vert-image-canvas" width="1920" height="1920"></canvas>
+      <!-- We pre generate the image to the current slide to make download instantaneous -->
+    </div>
   </div>
-
   <script>
-    const jobId = "{{ job_id or '' }}";
-    const shell = document.getElementById("shell");
-    const statusEl = document.getElementById("status");
-
-    let slides = [];
-    let current = 0;
-
-    const render = () => {
-      shell.innerHTML = "";
-      if (!slides.length) return;
-      const slide = slides[current];
-
-      const s = document.createElement("div");
-      s.className = "slide";
-      s.addEventListener("click", () => next());
-
-      const card = document.createElement("div");
-      card.className = "card";
-      card.innerHTML = `
-        <div class="title">${slide.title || ""}</div>
-        <div class="big">${slide.big ?? ""}</div>
-        <div class="bottom">${slide.bottom || ""}</div>
-      `;
-
-      if (slide.list && slide.list.length) {
-        const ul = document.createElement("ul");
-        ul.className = "list";
-        slide.list.forEach(item => {
-          const sections = item.sections && item.sections.length ? ` <small>(${item.sections.join(", ")})</small>` : "";
-          const li = document.createElement("li");
-          li.innerHTML = `${item.name} (${item.count} classes)${sections}`;
-          ul.appendChild(li);
-        });
-        card.appendChild(ul);
-      }
-
-      if (slide.grid && slide.grid.length) {
-        const grid = document.createElement("div");
-        grid.className = "grid";
-        slide.grid.forEach(cell => {
-          const gc = document.createElement("div");
-          gc.className = "grid-card";
-          gc.innerHTML = `<div class="grid-label">${cell.label}</div><div class="grid-value">${cell.value}</div>`;
-          grid.appendChild(gc);
-        });
-        card.appendChild(grid);
-      }
-
-      s.appendChild(card);
-      shell.appendChild(s);
-
-      // Navigation dots
-      const nav = document.createElement("div");
-      nav.className = "nav";
-      slides.forEach((_, idx) => {
-        const dot = document.createElement("div");
-        dot.className = "dot" + (idx === current ? " active" : "");
-        dot.addEventListener("click", (e) => { e.stopPropagation(); current = idx; render(); });
-        nav.appendChild(dot);
-      });
-      shell.appendChild(nav);
-
-      // Arrows
-      const left = document.createElement("button");
-      left.className = "nav-btn left";
-      left.textContent = "◀";
-      left.onclick = (e) => { e.stopPropagation(); prev(); };
-      shell.appendChild(left);
-
-      const right = document.createElement("button");
-      right.className = "nav-btn right";
-      right.textContent = "▶";
-      right.onclick = (e) => { e.stopPropagation(); next(); };
-      shell.appendChild(right);
-    };
-
-    const next = () => { current = (current + 1) % slides.length; render(); };
-    const prev = () => { current = (current - 1 + slides.length) % slides.length; render(); };
-
-    let pollTimer = null;
-
-    async function pollOnce() {
-      try {
-        const res = await fetch(`/api/job/${jobId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.slides) {
-          slides = data.slides;
-          render();
-          statusEl.textContent = "Recap ready!";
-          if (pollTimer) clearInterval(pollTimer);
-        } else {
-          const stage = data.progress && data.progress.stage ? ` • ${data.progress.stage}` : "";
-          statusEl.textContent = `Generating your recap... ${data.status || ""}${stage}`;
-        }
-      } catch (_) {
-        // ignore
-      }
-    }
-
-    function startPollingFallback() {
-      if (pollTimer) return;
-      pollTimer = setInterval(pollOnce, 2500);
-      pollOnce();
-    }
-
-    function connectWS() {
-      if (!jobId) {
-        statusEl.textContent = "No recap ID provided.";
-        return;
-      }
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${location.host}/ws/job/${jobId}`);
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.slides) {
-          slides = data.slides;
-          render();
-        } else if (data.status === "error") {
-          statusEl.textContent = "Something went wrong: " + (data.error || "unknown error");
-        } else if (data.status === "done") {
-          statusEl.textContent = "Recap ready!";
-          startPollingFallback(); // fetch slides if not included
-        } else {
-          const stage = data.stage ? ` • ${data.stage}` : "";
-          statusEl.textContent = `Generating your recap... ${data.status}${stage}`;
-        }
-      };
-      ws.onerror = () => {
-        statusEl.textContent = "WebSocket error. Falling back to polling.";
-        startPollingFallback();
-      };
-      ws.onclose = () => {
-        // if we didn't get slides yet, fall back
-        if (!slides.length) {
-          statusEl.textContent = "Connection closed. Falling back to polling.";
-          startPollingFallback();
-        }
-      };
-      ws.onopen = () => { statusEl.textContent = "Connected. Generating your recap..."; };
-    }
-
-    connectWS();
-    document.addEventListener("keydown", (e) => {
-      if (!slides.length) return;
-      if (e.key === "ArrowRight" || e.key === " ") next();
-      if (e.key === "ArrowLeft") prev();
-    });
+    const RECAP_ID = {{ recap_id|tojson }};
+    const EMAIL = {{ email|tojson }};
+    const SHOW_EXISTING = {{ show_existing|tojson }};
+    const IS_GENERATING = {{ is_generating|tojson }};
   </script>
-</body>
-</html>
+  <script src="{{ url_for('static', filename='js/recap.js') }}"></script>
+{% endblock %}

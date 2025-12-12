@@ -18,6 +18,7 @@ import sqlite3
 import threading
 import time
 import queue
+import base64
 from datetime import datetime, timedelta
 from collections import defaultdict
 from types import SimpleNamespace
@@ -43,6 +44,7 @@ except Exception:
 
 import schoolopy
 import requests_oauthlib
+import requests
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,126 +74,184 @@ subscribers: dict[str, list[queue.Queue]] = {}
 if not SCHOOLOGY_CONSUMER_KEY or not SCHOOLOGY_CONSUMER_SECRET:
     logger.warning("Schoology consumer key/secret missing; OAuth will fail.")
 
-# Initialize jobs database ---------------------------------------------------
-def init_job_db():
+# Initialize databases ---------------------------------------------------
+def init_recap_db():
+    """Initialize both recaps (permanent) and jobs (temporary queue) tables."""
     conn = sqlite3.connect(JOB_DB_PATH)
     cur = conn.cursor()
+
+    # Recaps table (permanent storage)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recaps (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE,
+            slides_json TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+
+    # Jobs table (temporary queue - deleted after completion)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY,
-            status TEXT,
-            created_at TEXT,
             email TEXT,
+            status TEXT,
             access_token TEXT,
             access_token_secret TEXT,
             two_legged INTEGER DEFAULT 0,
-            slides_json TEXT,
             progress_json TEXT,
-            error TEXT
+            created_at TEXT
         )
         """
     )
-    # Add two_legged column if missing (migration-friendly)
-    cur.execute("PRAGMA table_info(jobs)")
-    cols = [row[1] for row in cur.fetchall()]
-    if "two_legged" not in cols:
-        cur.execute("ALTER TABLE jobs ADD COLUMN two_legged INTEGER DEFAULT 0")
-    if "progress_json" not in cols:
-        cur.execute("ALTER TABLE jobs ADD COLUMN progress_json TEXT")
+
     conn.commit()
     conn.close()
 
 
-init_job_db()
+init_recap_db()
 
 
-# Background worker ----------------------------------------------------------
-# Job persistence helpers ---------------------------------------------------
+# Database helper functions -------------------------------------------------
 def get_conn():
     return sqlite3.connect(JOB_DB_PATH, check_same_thread=False)
 
 
-def create_job(job_id, email, access_token, access_token_secret, two_legged: bool = False):
+# Recap operations (permanent storage)
+def get_recap_by_email(email):
+    """Get the recap for an email (one per email)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, email, slides_json, created_at, updated_at FROM recaps WHERE email = ?", (email,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "email": row[1],
+        "slides": json.loads(row[2]) if row[2] else None,
+        "created_at": row[3],
+        "updated_at": row[4],
+    }
+
+
+def get_recap_by_id(recap_id):
+    """Get a recap by its ID."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, email, slides_json, created_at, updated_at FROM recaps WHERE id = ?", (recap_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "email": row[1],
+        "slides": json.loads(row[2]) if row[2] else None,
+        "created_at": row[3],
+        "updated_at": row[4],
+    }
+
+
+def save_recap(recap_id, email, slides):
+    """Save or update a recap (replaces existing for this email)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    # Delete existing recap for this email
+    cur.execute("DELETE FROM recaps WHERE email = ?", (email,))
+    # Insert new recap
+    cur.execute(
+        "INSERT INTO recaps (id, email, slides_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (recap_id, email, json.dumps(slides), now, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+# Job operations (temporary queue)
+def create_job(job_id, email, access_token, access_token_secret, two_legged=False):
+    """Create a new job in the queue."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO jobs (id, status, created_at, email, access_token, access_token_secret, two_legged, slides_json, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (id, email, status, access_token, access_token_secret, two_legged, created_at, progress_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (
-            job_id,
-            "queued",
-            datetime.utcnow().isoformat(),
-            email,
-            access_token,
-            access_token_secret,
-            1 if two_legged else 0,
-            None,
-            None,
-        ),
+        (job_id, email, "queued", access_token, access_token_secret, 1 if two_legged else 0, datetime.utcnow().isoformat(), None),
     )
     conn.commit()
     conn.close()
 
 
-def update_job_status(job_id, status, error=None, progress: dict | None = None):
+def get_job(job_id):
+    """Get a job from the queue."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE jobs SET status = ?, error = ?, progress_json = ? WHERE id = ?",
-        (status, error, json.dumps(progress) if progress else None, job_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-def save_job_result(job_id, slides):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE jobs SET slides_json = ?, status = ?, progress_json = ? WHERE id = ?",
-        (json.dumps(slides), "done", None, job_id),
-    )
-    conn.commit()
-    conn.close()
-
-    notify_progress(job_id, {"status": "done", "slides": slides})
-
-
-def fetch_job(job_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, status, created_at, email, slides_json, error, progress_json FROM jobs WHERE id = ?",
+        "SELECT id, email, status, access_token, access_token_secret, two_legged, progress_json FROM jobs WHERE id = ?",
         (job_id,),
     )
     row = cur.fetchone()
     conn.close()
     if not row:
         return None
-    slides = json.loads(row[4]) if row[4] else None
-    progress = json.loads(row[6]) if row[6] else None
     return {
         "id": row[0],
-        "status": row[1],
-        "created_at": row[2],
-        "email": row[3],
-        "slides": slides,
-        "error": row[5],
-        "progress": progress,
+        "email": row[1],
+        "status": row[2],
+        "access_token": row[3],
+        "access_token_secret": row[4],
+        "two_legged": bool(row[5]),
+        "progress": json.loads(row[6]) if row[6] else None,
     }
 
 
-def notify_progress(job_id: str, payload: dict):
-    """Notify WebSocket subscribers and persist progress snapshot."""
-    # push to subscribers
-    subs = subscribers.get(job_id, [])
-    for q in subs:
-        q.put(payload)
-    # persist snapshot
-    update_job_status(job_id, status=payload.get("status", "running"), progress=payload)
+def get_job_by_email(email):
+    """Get the active job for an email (if any)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, email, status, progress_json FROM jobs WHERE email = ? LIMIT 1",
+        (email,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "email": row[1],
+        "status": row[2],
+        "progress": json.loads(row[3]) if row[3] else None,
+    }
+
+
+def update_job_progress(job_id, progress):
+    """Update job progress."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE jobs SET progress_json = ? WHERE id = ?",
+        (json.dumps(progress), job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_job(job_id):
+    """Delete a job from the queue (after completion or error)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
 
 
 def claim_next_job():
@@ -231,6 +291,111 @@ def claim_next_job():
     return None
 
 
+def notify_progress(job_id: str, payload: dict):
+    """Notify WebSocket subscribers and persist progress."""
+    # Push to subscribers
+    subs = subscribers.get(job_id, [])
+    for q in subs:
+        q.put(payload)
+    # Update job progress (not status, since status is only queued/running)
+    if payload.get("status") not in ["done", "error"]:
+        update_job_progress(job_id, payload)
+
+
+def fetch_user_profile(auth, user_id: str | None):
+    if not user_id:
+        return {}
+    try:
+        resp = auth.oauth.get(f"{SCHOOLOGY_API_DOMAIN}/v1/users/{user_id}", timeout=10)
+        if resp.status_code == 200:
+            return resp.json() or {}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch user profile for %s: %s", user_id, exc)
+    return {}
+
+
+def fetch_avatar_data_uri(auth, avatar_url: str | None):
+    if not avatar_url:
+        return None
+
+    session = getattr(auth, "oauth", None)
+    try:
+        resp = session.get(avatar_url, timeout=10) if session else requests.get(avatar_url, timeout=10)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Avatar fetch failed for %s: %s", avatar_url, exc)
+        return None
+
+    if not resp or resp.status_code >= 400:
+        logger.warning("Avatar fetch returned status %s for %s", getattr(resp, "status_code", "?"), avatar_url)
+        return None
+
+    data = resp.content or b""
+    content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+    is_svg = "svg" in content_type or avatar_url.lower().endswith(".svg")
+    media_type = content_type or "image/png"
+
+    if is_svg:
+        try:
+            import cairosvg
+
+            data = cairosvg.svg2png(bytestring=data)
+            media_type = "image/png"
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("SVG to PNG conversion failed for %s: %s", avatar_url, exc)
+            media_type = "image/svg+xml"
+
+    try:
+        encoded = base64.b64encode(data).decode("ascii")
+        return f"data:{media_type};base64,{encoded}"
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Avatar encoding failed for %s: %s", avatar_url, exc)
+        return None
+
+
+def send_recap_email(email: str | None, job_id: str):
+    """Send recap-ready email via SES when configured, else log to console."""
+    if not email:
+        return
+
+    base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    recap_link = f"{base_url}/recap/{job_id}" if base_url else f"/recap/{job_id}"
+
+    ses_region = os.environ.get("AWS_SES_REGION")
+    ses_sender = os.environ.get("AWS_SES_SENDER")
+    aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
+    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+
+    if ses_region and ses_sender and aws_key and aws_secret:
+        try:
+            import boto3
+
+            ses_client = boto3.client(
+                "ses",
+                region_name=ses_region,
+                aws_access_key_id=aws_key,
+                aws_secret_access_key=aws_secret,
+            )
+            ses_client.send_email(
+                Source=ses_sender,
+                Destination={"ToAddresses": [email]},
+                Message={
+                    "Subject": {"Data": "Your Schoology recap is ready"},
+                    "Body": {
+                        "Text": {
+                            "Data": f"Your recap is ready. View it here: {recap_link}",
+                        }
+                    },
+                },
+            )
+            logger.info("SES email sent to %s for recap %s", email, job_id)
+            return
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("SES email failed; falling back to log: %s", exc)
+
+    # Fallback: log/print if SES not configured
+    logger.info("Recap ready for %s; link: %s", email, recap_link)
+
+
 # Background worker ----------------------------------------------------------
 def worker():
     while True:
@@ -251,12 +416,19 @@ def worker():
                     "two_legged": job.get("two_legged", False),
                 }
             )
-            save_job_result(job_id, slides)
-            # TODO: send SES email here with link to /recap?id={job_id}
+            # Save to recaps table
+            save_recap(job_id, job["email"], slides)
+            # Notify completion
+            notify_progress(job_id, {"status": "done", "slides": slides})
+            # Delete job from queue (OAuth tokens deleted)
+            delete_job(job_id)
+            send_recap_email(job["email"], job_id)
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Job %s failed", job_id)
-            update_job_status(job_id, "error", error=str(exc))
+            # Notify error
             notify_progress(job_id, {"status": "error", "error": str(exc)})
+            # Delete job from queue (don't leave failed jobs)
+            delete_job(job_id)
 
 
 worker_thread = threading.Thread(target=worker, daemon=True)
@@ -408,10 +580,22 @@ def build_recap(payload):
     except Exception:
         me = None
     user_id = getattr(me, "uid", None) if me else None
+    profile_data = fetch_user_profile(auth, user_id)
+    avatar_source_url = (
+        profile_data.get("picture_url")
+        or profile_data.get("picture")
+        or profile_data.get("pic_url")
+        or (getattr(me, "picture_url", "") if me else "")
+    )
+    avatar_data_uri = fetch_avatar_data_uri(auth, avatar_source_url)
+
     schoology_user = {
         "id": user_id,
-        "name": getattr(me, "name_display", "") if me else "",
-        "email": user_email or (getattr(me, "primary_email", "") if me else ""),
+        "name": profile_data.get("name_display")
+        or profile_data.get("name")
+        or (getattr(me, "name_display", "") if me else ""),
+        "email": user_email or profile_data.get("primary_email") or (getattr(me, "primary_email", "") if me else ""),
+        "avatar": avatar_data_uri or avatar_source_url or "",
     }
     notify_progress(job_id, {"status": "running", "stage": "me", "user_id": user_id})
 
@@ -441,7 +625,6 @@ def build_recap(payload):
             section_enrollments[section.id] = []
 
     assignments_by_section = defaultdict(list)
-    grades_lookup = {}  # assignment_id -> grade (float)
     # Store only the latest submission per assignment for this user
     latest_submissions: dict[str, SimpleNamespace] = {}
     section_lookup = {}
@@ -501,21 +684,6 @@ def build_recap(payload):
             assignment_lookup[str(a.id)] = a
 
     # Metrics ---------------------------------------------------------------
-    # Missing assignments (debug_missing_late logic): allow_dropbox == 1 AND no submission for this user
-    missing = 0
-    missing_per_course = defaultdict(int)
-    submitted_assignment_ids = set(latest_submissions.keys())
-    missing_ids = set()
-    for section in sections:
-        assigns = assignments_by_section.get(section.id, [])
-        for a in assigns:
-            aid = str(getattr(a, "id", ""))
-            allow_dropbox = str(getattr(a, "allow_dropbox", "1")) == "1"
-            if allow_dropbox and aid not in submitted_assignment_ids:
-                missing += 1
-                missing_per_course[section.id] += 1
-                missing_ids.add(aid)
-
     # Busiest month
     month_counts = defaultdict(int)
     for assigns in assignments_by_section.values():
@@ -554,7 +722,7 @@ def build_recap(payload):
             weekend_subs += 1
         else:
             weekday_subs += 1
-        if submitted.hour >= 22:
+        if submitted.hour >= 22 or submitted.hour < 6:
             night_owl_subs += 1
 
     total_subs = weekend_subs + weekday_subs or 1
@@ -571,96 +739,27 @@ def build_recap(payload):
         submitted = parse_dt(getattr(sub, "submitted", None)) or parse_dt(getattr(sub, "created", None))
         if not submitted:
             continue
-        aid = str(getattr(assignment, "id", "")) if assignment else ""
-        if aid in missing_ids:
-            continue
+
         is_late_flag = bool(getattr(sub, "late", False))
         is_late = (submitted and due and submitted > due) or is_late_flag
         is_on_time = not is_late
         on_time_flags.append(is_on_time)
 
-        if is_on_time and due:
+        if is_late:
+            # Late work counts as zero hours early for average procrastination
+            deltas.append(timedelta())
+            late_submissions += 1
+            continue
+
+        if due:
             delta = due - submitted
             deltas.append(delta)
             if delta >= timedelta(hours=48):
                 early_birds += 1
-        if is_late:
-            late_submissions += 1
 
     avg_procrastination = None
     if deltas:
         avg_procrastination = sum(deltas, timedelta()) / len(deltas)
-
-    # Missing assignments (debug script aligned): allow_dropbox==1 and no submission for this user
-    missing = 0
-    missing_per_course = defaultdict(int)
-    missing_ids = set()
-    for section in sections:
-        assigns = assignments_by_section.get(section.id, [])
-        for a in assigns:
-            aid = str(getattr(a, "id", ""))
-            allow_dropbox = str(getattr(a, "allow_dropbox", "1")) == "1"
-            latest = get_latest_user_submission(sc, auth, section.id, aid, user_id)
-            if allow_dropbox and not latest:
-                missing += 1
-                missing_per_course[section.id] += 1
-                missing_ids.add(aid)
-
-    most_missing_course = None
-    if missing_per_course:
-        most_missing_course = max(missing_per_course.items(), key=lambda x: x[1])
-
-    # Consistency streak (approximate)
-    streak = 0
-    best_streak = 0
-    for flag in sorted(
-        on_time_flags, reverse=False
-    ):
-        if flag:
-            streak += 1
-            best_streak = max(best_streak, streak)
-        else:
-            streak = 0
-
-    # Workload peaks
-    week_counts = defaultdict(int)
-    for assigns in assignments_by_section.values():
-        for a in assigns:
-            due = parse_dt(getattr(a, "due", None))
-            if not due:
-                continue
-            week_start = (due - timedelta(days=due.weekday())).date()
-            week_counts[week_start] += 1
-
-    peak_week = drought_week = None
-    if week_counts:
-        peak_week = max(week_counts.items(), key=lambda x: x[1])
-        drought_week = min(week_counts.items(), key=lambda x: x[1])
-
-    # Attachment stats (latest submissions only)
-    total_files = 0
-    max_file_size = 0
-    for sub in latest_submissions.values():
-        attachments = getattr(sub, "attachments", None)
-        if attachments and hasattr(attachments, "files") and getattr(attachments.files, "file", None):
-            files = attachments.files.file
-            if isinstance(files, list):
-                total_files += len(files)
-                for f in files:
-                    size = getattr(f, "filesize", 0) or 0
-                    try:
-                        size = int(size)
-                    except Exception:
-                        size = 0
-                    max_file_size = max(max_file_size, size)
-            else:
-                total_files += 1
-                size = getattr(files, "filesize", 0) or 0
-                try:
-                    size = int(size)
-                except Exception:
-                    size = 0
-                max_file_size = max(max_file_size, size)
 
     # Classroom constants (top classmates by shared sections)
     classmate_counts = defaultdict(lambda: {"count": 0, "sections": set(), "name": ""})
@@ -675,165 +774,48 @@ def build_recap(payload):
 
     top_classmates = sorted(classmate_counts.items(), key=lambda x: x[1]["count"], reverse=True)[:5]
 
-    # Build slides ----------------------------------------------------------
-    slides = []
-
-    def add_slide(title, big, bottom, extra=None):
-        slides.append({"title": title, "big": big, "bottom": bottom, "extra": extra or {}})
-
-    # Slide order (12 requested)
-    add_slide(
-        "Busiest Month",
-        busiest_month[0] if busiest_month else "—",
-        f"You had {busiest_month[1]} assignments due in {busiest_month[0]}!"
-        if busiest_month
-        else "No assignments found.",
-    )
-
-    add_slide(
-        "Course with Most Assignments",
-        getattr(section_lookup.get(top_assignment_course[0]), "course_title", "—") if top_assignment_course else "—",
-        f"{top_assignment_course[1]} assignments this year" if top_assignment_course else "No data.",
-    )
-
-    add_slide(
-        "Class Size Champion",
-        getattr(section_lookup.get(class_size_champ[0]), "course_title", "—") if class_size_champ else "—",
-        f"You shared this class with {class_size_champ[1]} classmates" if class_size_champ else "No enrollments found.",
-    )
-
-    add_slide("Weekend Warrior", weekend_subs, "assignments submitted on weekends")
-    add_slide("Weekday Grinder", weekday_subs, "assignments submitted on weekdays")
-    add_slide(
-        "Night Owl Score",
-        night_owl_subs,
-        f"assignments submitted after 10pm... that's {night_pct}% of assignments!",
-    )
-
-    # Average procrastination
+    # Helper function for formatting time deltas
     def format_delta(td: timedelta):
         total_hours = td.total_seconds() / 3600
-        if total_hours >= 48:
-            return f"{total_hours/24:.1f} days"
-        if total_hours >= 0:
-            return f"{total_hours:.0f} hours"
-        if total_hours < 0:
-            return f"{total_hours:.0f} hours"
+        return f"{total_hours:.1f}"
 
-    if avg_procrastination is not None:
-        delta_text = format_delta(avg_procrastination)
-        # Custom bottom text based on cutoff
-        hours = avg_procrastination.total_seconds() / 3600
-        if hours < 1:
-            bottom_text = f"{delta_text}... wow, you're really cutting it close!"
-        elif hours > 48:
-            bottom_text = f"{delta_text}... wow, you're really organized!"
-        else:
-            bottom_text = f"{delta_text} before the deadline (pretty good!)"
-        add_slide("Average Procrastination", delta_text, bottom_text)
-    else:
-        add_slide("Average Procrastination", "—", "No submissions with due dates.")
+    # Calculate total assignments
+    total_assignments = sum(len(assigns) for assigns in assignments_by_section.values())
 
-    total_submissions = len(latest_submissions) or 1
-    early_pct = round((early_birds / total_submissions) * 100, 1)
-    add_slide(
-        "Early Bird",
-        early_birds,
-        f"assignments submitted more than 48 hours early... that's {early_pct}% of assignments!",
-    )
+    # Return computed variables for frontend to use with recap-style.json
+    return {
+        # Basic counts
+        "total_assignments": total_assignments,
+        "total_courses": len(sections),
+        "user_name": schoology_user.get("name", ""),
+        "user_avatar": schoology_user.get("avatar", ""),
+        "user_email": schoology_user.get("email", ""),
 
-    total_submissions = len(latest_submissions) or 1
-    late_pct = round((late_submissions / total_submissions) * 100, 1)
-    add_slide(
-        "Late Ledger",
-        late_submissions,
-        f"late submissions... that's {late_pct}% of assignments!",
-    )
+        # Busiest month
+        "busiest_month": busiest_month[0] if busiest_month else "",
+        "assignments_bm": busiest_month[1] if busiest_month else 0,
 
-    add_slide(
-        "Missing Watch",
-        missing,
-        "missing assignments (and you didn't turn these ones in...)" if missing else "No missing assignments!",
-    )
+        # Submission timing
+        "weekend_subs": weekend_subs,
+        "weekday_subs": weekday_subs,
+        "night_owl_subs": night_owl_subs,
+        "night_owl_pct": night_pct,
 
-    # Most missing course with percent within that course
-    if most_missing_course:
-        course_obj = section_lookup.get(most_missing_course[0])
-        total_in_course = len(assignments_by_section.get(most_missing_course[0], [])) or 1
-        pct = round((most_missing_course[1] / total_in_course) * 100, 1)
-        add_slide(
-            "Most Missing Course",
-            getattr(course_obj, "course_title", "—"),
-            f"{most_missing_course[1]} missing assignments... that's {pct}% of assignments!",
-        )
-    else:
-        add_slide("Most Missing Course", "—", "No missing assignments!")
+        # Procrastination metrics
+        "avg_procrastination": format_delta(avg_procrastination) if avg_procrastination else "0",
+        "early_birds": early_birds,
+        "early_bird_pct": round((early_birds / (len(latest_submissions) or 1)) * 100, 1),
+        "late_submissions": late_submissions,
+        "late_pct": round((late_submissions / (len(latest_submissions) or 1)) * 100, 1),
 
-    # Classroom constants list
-    classmates_list = []
-    for uid, info in top_classmates:
-        classmates_list.append(
-            {
-                "name": info["name"],
-                "count": info["count"],
-                "sections": sorted(list(info["sections"]))[:5],
-            }
-        )
-    slides.append(
-        {
-            "title": "Your Classroom Constants",
-            "big": "",
-            "bottom": "You shared a lot of classes with these classmates!",
-            "list": classmates_list,
-        }
-    )
+        # Top courses
+        "top_assignment_course": getattr(section_lookup.get(top_assignment_course[0]), "course_title", "") if top_assignment_course else "",
+        "top_assignment_count": top_assignment_course[1] if top_assignment_course else 0,
 
-    # Summary bento (shareable 8 cards)
-    grid_cards = []
-    grid_cards.append(
-        {
-            "label": "Busiest Month",
-            "value": busiest_month[0] if busiest_month else "—",
-        }
-    )
-    grid_cards.append(
-        {
-            "label": "Most Assignments",
-            "value": getattr(section_lookup.get(top_assignment_course[0]), "course_title", "—")
-            if top_assignment_course
-            else "—",
-        }
-    )
-    grid_cards.append(
-        {
-            "label": "Class Size",
-            "value": getattr(section_lookup.get(class_size_champ[0]), "course_title", "—")
-            if class_size_champ
-            else "—",
-        }
-    )
-    grid_cards.append({"label": "Weekend Warrior", "value": weekend_subs})
-    grid_cards.append({"label": "Night Owl", "value": f"{night_owl_subs} ({night_pct}%)"})
-    grid_cards.append(
-        {
-            "label": "Avg Procrastination",
-            "value": format_delta(avg_procrastination) if avg_procrastination else "—",
-        }
-    )
-    grid_cards.append({"label": "Late Ledger", "value": late_submissions})
-    grid_cards.append({"label": "Missing Watch", "value": missing})
-
-    slides.append(
-        {
-            "title": "Recap Highlights",
-            "big": "",
-            "bottom": "",
-            "grid": grid_cards,
-            "layout": "grid",
-        }
-    )
-
-    return slides
+        # Class size
+        "class_size_champ": getattr(section_lookup.get(class_size_champ[0]), "course_title", "") if class_size_champ else "",
+        "class_size_count": class_size_champ[1] if class_size_champ else 0,
+    }
 
 
 # Routes --------------------------------------------------------------------
@@ -846,9 +828,12 @@ def index():
 def auth_start():
     """Kick off Schoology OAuth."""
     if TWO_LEGGED_DEBUG:
-        job_id = str(uuid.uuid4())
-        create_job(job_id, DEBUG_EMAIL, None, None, two_legged=True)
-        return redirect(url_for("recap_view", id=job_id))
+        # Store debug credentials in session
+        session["email"] = DEBUG_EMAIL
+        session["access_token"] = None
+        session["access_token_secret"] = None
+        session["two_legged"] = True
+        return redirect("/recap")
 
     if not SCHOOLOGY_CONSUMER_KEY or not SCHOOLOGY_CONSUMER_SECRET:
         return "Missing Schoology API keys. Set SCHOOLOGY_CONSUMER_KEY/SECRET.", 500
@@ -906,36 +891,100 @@ def auth_callback():
     me = sc.get_me()
     email = getattr(me, "primary_email", None)
 
-    job_id = str(uuid.uuid4())
-    create_job(job_id, email, access_token, access_token_secret)
+    # Store email and tokens in session
+    session["email"] = email
+    session["access_token"] = access_token
+    session["access_token_secret"] = access_token_secret
 
-    return redirect(url_for("recap_view", id=job_id))
+    # Redirect to /recap (no parameters)
+    return redirect("/recap")
 
 
 @app.route("/recap")
-def recap_view():
-    job_id = request.args.get("id")
-    return render_template("recap.html", job_id=job_id)
+def recap_index():
+    """Landing page for /recap - checks for existing recap or starts new job."""
+    email = session.get("email")
+    if not email:
+        return redirect("/")  # No auth, go to landing
+
+    # Check for existing completed recap
+    existing_recap = get_recap_by_email(email)
+
+    # Check for in-progress job
+    active_job = get_job_by_email(email)
+
+    if existing_recap and not active_job:
+        # Has completed recap, no job in progress - show existing screen
+        return render_template("recap.html",
+                             recap_id=existing_recap["id"],
+                             email=email,
+                             show_existing=True,
+                             is_generating=False)
+    elif active_job:
+        # Job in progress - redirect to job URL
+        return redirect(f"/recap/{active_job['id']}")
+    else:
+        # No recap, no job - create new job and redirect
+        job_id = str(uuid.uuid4())
+        access_token = session.get("access_token")
+        access_token_secret = session.get("access_token_secret")
+        two_legged = session.get("two_legged", False)
+        create_job(job_id, email, access_token, access_token_secret, two_legged=two_legged)
+        return redirect(f"/recap/{job_id}")
 
 
-@app.route("/api/job/<job_id>")
-def job_status(job_id):
-    job = fetch_job(job_id)
-    if not job:
+@app.route("/recap/<recap_id>")
+def recap_view(recap_id):
+    """View specific recap (generating or completed)."""
+    # Check if this is an active job
+    job = get_job(recap_id)
+    if job:
+        # Job in progress
+        return render_template("recap.html",
+                             recap_id=recap_id,
+                             email=job["email"],
+                             show_existing=False,
+                             is_generating=True)
+
+    # Check if this is a completed recap
+    recap = get_recap_by_id(recap_id)
+    if recap:
+        # Completed recap
+        return render_template("recap.html",
+                             recap_id=recap_id,
+                             email=recap["email"],
+                             show_existing=False,
+                             is_generating=False)
+
+    # Not found
+    return "Recap not found", 404
+
+
+@app.route("/api/recap/<recap_id>")
+def get_recap_api(recap_id):
+    """Get a completed recap by ID."""
+    recap = get_recap_by_id(recap_id)
+    if not recap:
         return jsonify({"error": "not_found"}), 404
-    return jsonify(job)
+    return jsonify(recap)
 
 
 # WebSocket for live progress updates
 @sock.route("/ws/job/<job_id>")
 def job_ws(ws, job_id):
-    # send initial state
-    job = fetch_job(job_id)
+    # Send initial state
+    job = get_job(job_id)
     if job:
-        ws.send(json.dumps(job))
-    # subscribe
+        initial_state = {
+            "status": job["status"],
+            "progress": job["progress"],
+        }
+        ws.send(json.dumps(initial_state))
+
+    # Subscribe to updates
     q = queue.Queue()
     subscribers.setdefault(job_id, []).append(q)
+
     try:
         while True:
             payload = q.get()
@@ -943,10 +992,45 @@ def job_ws(ws, job_id):
     except Exception:
         pass
     finally:
-        # cleanup
+        # Cleanup
         subs = subscribers.get(job_id, [])
         if q in subs:
             subs.remove(q)
+
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html")
+
+
+@app.route("/s/<username>")
+def shared_recap(username):
+    """Shared recap view for username (e.g., /s/28axu for 28axu@pinewood.edu)."""
+    # Construct email from username
+    email = f"{username}@pinewood.edu"
+
+    # Look up recap by email
+    recap = get_recap_by_email(email)
+    if not recap or not recap.get("slides"):
+        return "Recap not found", 404
+
+    slides = recap["slides"]
+
+    # Build recap URL for iframe
+    base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base_url:
+        base_url = request.host_url.rstrip("/")
+    recap_url = f"{base_url}/recap/{recap['id']}"
+
+    # Render shared recap template
+    return render_template(
+        "shared-recap.html",
+        user_name=slides.get("user_name", ""),
+        user_email=email,
+        total_assignments=slides.get("total_assignments", 0),
+        total_courses=slides.get("total_courses", 0),
+        recap_url=recap_url,
+    )
 
 
 if __name__ == "__main__":
