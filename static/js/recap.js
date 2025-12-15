@@ -28,8 +28,21 @@ function viewExisting() {
 
 // Generate new recap (replace existing)
 function generateNew() {
-    // Redirect to /recap to create new job
-    window.location.href = "/recap";
+    // Delete existing recap, then redirect to auth flow
+    fetch('/api/recap/delete', {
+        method: 'POST',
+        credentials: 'same-origin'
+    })
+    .then(res => res.json())
+    .then(() => {
+        // Redirect to OAuth to start fresh
+        window.location.href = "/auth/start";
+    })
+    .catch(err => {
+        console.error("Failed to delete recap:", err);
+        // Fallback: try to start auth anyway
+        window.location.href = "/auth/start";
+    });
 }
 
 // Connect to WebSocket for job updates
@@ -887,7 +900,9 @@ function buildSlideElements(cards, data) {
         const title = document.createElement('p');
         title.className = 'slide-title';
         if (isTitleSlide) {
-            title.innerHTML = 'Recap <span class="title-byline">by Tech Club</span>';
+            title.innerHTML = 'Tech Club Presents:';
+            // bigger than normal
+            title.style.fontSize = 'clamp(36px, 5vw, 48px)';
         } else {
             title.textContent = rawTitle;
         }
@@ -900,7 +915,10 @@ function buildSlideElements(cards, data) {
         }
 
         if (isTitleSlide) {
-            big.textContent = isEmbed ? `${userName}'s Recap` : 'Recap';
+            big.textContent = 'Your Schoology Recap';
+            // smaller than usual
+            big.style.fontSize = 'clamp(40px, 6vw, 60px)';
+            big.style.fontWeight = '600';
         } else if (card.type === 'num_countup' || card.type === 'countup') {
             const startNum = substituteVariables(String(card.effect?.start_num || 0), data);
             big.textContent = startNum;

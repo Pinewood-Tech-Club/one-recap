@@ -830,8 +830,8 @@ def auth_start():
     if TWO_LEGGED_DEBUG:
         # Store debug credentials in session
         session["email"] = DEBUG_EMAIL
-        session["access_token"] = None
-        session["access_token_secret"] = None
+        session["access_token"] = SCHOOLOGY_CONSUMER_KEY
+        session["access_token_secret"] = SCHOOLOGY_CONSUMER_SECRET
         session["two_legged"] = True
         return redirect("/recap")
 
@@ -967,6 +967,23 @@ def get_recap_api(recap_id):
     if not recap:
         return jsonify({"error": "not_found"}), 404
     return jsonify(recap)
+
+
+@app.route("/api/recap/delete", methods=["POST"])
+def delete_recap_by_email():
+    """Delete recap by email (for regeneration)."""
+    email = session.get("email")
+    if not email:
+        return jsonify({"error": "not_authenticated"}), 401
+
+    # Delete the existing recap for this email
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM recaps WHERE email = ?", (email,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True})
 
 
 # WebSocket for live progress updates
