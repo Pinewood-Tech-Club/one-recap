@@ -26,6 +26,12 @@ body {
   max-width: 600px;
   text-align: center;
 }
+
+.wide-card {
+  width: calc(100vw - 24px);
+  max-width: 100vw;
+}
+
 h1 {
   font-size: 32px;
   margin: 0 0 12px 0;
@@ -223,6 +229,49 @@ ul {
   max-width: min(600px, 85vw);
 }
 
+.list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 800px;
+  align-items: flex-start;
+  padding: 0;
+  font-size: 1em;
+}
+
+.list-item {
+  width: 100%;
+  text-align: left;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.list-item:last-child {
+  border-bottom: none;
+}
+
+.list-item-title {
+  font-size: clamp(14px, 2vw, 18px);
+  font-weight: 600;
+  font-family: 'Noto Sans Mono', monospace;
+  letter-spacing: 0.02em;
+  color: var(--ac);
+  line-height: 1.4;
+}
+
+.list-item-subtitle {
+  font-size: clamp(11px, 1.5vw, 14px);
+  font-weight: 400;
+  margin-top: 6px;
+  opacity: 0.7;
+  font-family: 'Noto Sans Mono', monospace;
+  color: var(--fg);
+  line-height: 1.3;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
 .emj-overlay {
   position: fixed;
   inset: 0;
@@ -307,6 +356,10 @@ ul {
 }
 
 .controls-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 32px;
   width: auto;
   filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.18));
@@ -320,6 +373,33 @@ ul {
 
 .controls-icon.disabled {
   opacity: 0.5;
+}
+
+.controls-icon[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translate(-50%, 6px);
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+  z-index: 5;
+}
+
+.controls-icon[data-tooltip]:hover::after,
+.controls-icon[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, -2px);
 }
 
 .controls-picker {
@@ -431,15 +511,25 @@ ul {
   flex-wrap: wrap;
 }
 
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(8px);
+  }
+}
+
 .title-hints span {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  /* background: rgba(255, 255, 255, 0.12); */
+  /* border: 1px solid rgba(255, 255, 255, 0.18); */
   color: #e6ffee;
+  animation: bounce 2s infinite ease-in-out;
 }
 
 .title-byline {
@@ -452,6 +542,55 @@ ul {
 
 .slide.title-slide .title-byline {
   color: #e6ffee;
+}
+
+/* Grid slide styles */
+.slide-grid-container {
+  position: relative;
+  width: 90%;
+  max-width: 1200px;
+  aspect-ratio: 1 / 1;
+  margin: 0 auto;
+}
+
+.grid-item {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: clamp(12px, 1.5vw, 24px);
+  border-radius: 16px;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+.grid-item.center {
+  font-size: clamp(16px, 2vw, 24px);
+}
+
+.grid-item-title {
+  font-size: clamp(10px, 1vw, 14px);
+  opacity: 0.85;
+  margin-bottom: clamp(6px, 0.8vw, 12px);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.grid-item-value {
+  font-size: clamp(18px, 2.5vw, 40px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+.grid-item.double .grid-item-value {
+  font-size: clamp(14px, 1.8vw, 24px);
 }
 
 /* Responsive scaling for small screens */
@@ -481,5 +620,44 @@ ul {
   .title-hints span {
     padding: 8px 12px;
     font-size: 13px;
+  }
+
+  .list-container {
+    gap: 12px;
+  }
+
+  .list-item {
+    padding: 8px 0;
+  }
+
+  .list-item-title {
+    font-size: clamp(12px, 1.8vw, 14px);
+  }
+
+  .list-item-subtitle {
+    font-size: clamp(10px, 1.3vw, 12px);
+    margin-top: 4px;
+  }
+
+  .slide-grid-container {
+    width: 95%;
+    aspect-ratio: 1 / 1;
+  }
+
+  .grid-item {
+    padding: clamp(10px, 1.2vw, 16px);
+  }
+
+  .grid-item-title {
+    font-size: clamp(8px, 0.9vw, 11px);
+    margin-bottom: clamp(4px, 0.6vw, 8px);
+  }
+
+  .grid-item-value {
+    font-size: clamp(14px, 2vw, 28px);
+  }
+
+  .grid-item.double .grid-item-value {
+    font-size: clamp(11px, 1.5vw, 18px);
   }
 }

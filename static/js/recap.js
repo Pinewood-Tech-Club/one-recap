@@ -1,5 +1,7 @@
 // Global state
 let ws = null;
+const COPY_SHARE_TOOLTIP_DEFAULT = 'Copy Share URL';
+const COPY_SHARE_TOOLTIP_SUCCESS = 'Copied Share URL';
 
 // Initialize page
 function init_page() {
@@ -239,20 +241,16 @@ function startTitleHints() {
     if (promptInterval) clearInterval(promptInterval);
     const isMobile = window.matchMedia('(pointer: coarse)').matches;
     const prompts = isMobile
-        ? ['👆 Tap anywhere to begin', '➡️ Drag left to begin']
-        : ['🖱️ Click anywhere to begin', '➡️ Press → to begin', '🖱️ Scroll right to begin'];
+        ? 'Tap anywhere to begin'
+        : 'Click anywhere to begin';
     let idx = 0;
     const render = () => {
         hintsEl.innerHTML = '';
         const span = document.createElement('span');
-        span.textContent = prompts[idx];
+        span.textContent = prompts;
         hintsEl.appendChild(span);
     };
     render();
-    promptInterval = setInterval(() => {
-        idx = (idx + 1) % prompts.length;
-        render();
-    }, 2200);
 }
 
 function stopTitleHints() {
@@ -507,6 +505,120 @@ function runTextRevealEffect(element, effect, data) {
             requestAnimationFrame(animate);
         } else {
             element.textContent = finalText;
+        }
+    }
+
+    animate();
+}
+
+function runCryptoRevealEffect(element, effect, data) {
+    if (!element.classList.contains('list-container')) return;
+
+    const items = element.querySelectorAll('.list-item');
+    const itemRevealDuration = effect.item_duration || 800;  // ms per item
+    const staggerDelay = effect.stagger_delay || 150;  // delay between items
+    const cryptoChars = effect.crypto_chars || '▓▒░█▄▀▌│┤┐└┴┬├─┼╔╗╚╝║═╬';
+
+    // Shared state for synchronized shuffling across all items
+    const sharedState = {
+        shuffleCounter: 0,  // Increments when any element reveals a character
+        triggerShuffle: function() {
+            this.shuffleCounter++;
+        }
+    };
+
+    // Start ALL animations immediately so they all watch the shuffle counter
+    items.forEach((item, index) => {
+        const titleEl = item.querySelector('.list-item-title');
+        const subtitleEl = item.querySelector('.list-item-subtitle');
+        const titleText = item.dataset.titleText || '';
+        const subtitleText = item.dataset.subtitleText || '';
+
+        // Calculate stagger delay for this item
+        const titleDelay = index * staggerDelay;
+        const subtitleDelay = titleDelay + (itemRevealDuration * 0.3);
+
+        // Start animations immediately with stagger delay built in
+        animateCryptoReveal(titleEl, titleText, itemRevealDuration, cryptoChars, sharedState, titleDelay);
+        animateCryptoReveal(subtitleEl, subtitleText, itemRevealDuration * 0.7, cryptoChars, sharedState, subtitleDelay);
+    });
+}
+
+function animateCryptoReveal(element, finalText, duration, cryptoChars, sharedState, startDelay = 0) {
+    if (!finalText) {
+        element.textContent = '';
+        return;
+    }
+
+    const chars = Array.from(cryptoChars);
+    const finalChars = Array.from(finalText);
+    const textLength = finalChars.length;
+    const globalStartTime = Date.now();
+    let lastRevealCount = 0;
+    let lastShuffleCounter = sharedState ? sharedState.shuffleCounter : 0;
+    const randomCharFor = (targetChar) => {
+        // Preserve punctuation/whitespace/structure characters; only swap alphanumerics
+        return /[A-Za-z0-9]/.test(targetChar)
+            ? chars[Math.floor(Math.random() * chars.length)]
+            : targetChar;
+    };
+
+    let randomChars = finalChars.map((ch) => randomCharFor(ch));
+
+    function animate() {
+        const elapsed = Date.now() - globalStartTime;
+
+        // Calculate progress accounting for start delay
+        let progress = 0;
+        if (elapsed > startDelay) {
+            progress = Math.min((elapsed - startDelay) / duration, 1);
+        }
+
+        // Ease-out curve (consistent with other effects)
+        const eased = 1 - Math.pow(1 - progress, 3);
+
+        // Number of characters to reveal from left
+        const revealCount = Math.floor(eased * textLength);
+
+        // Trigger global shuffle when this element reveals a new character
+        if (revealCount > lastRevealCount) {
+            lastRevealCount = revealCount;
+            if (sharedState) {
+                sharedState.triggerShuffle();
+            }
+        }
+
+        // Reshuffle random characters when ANY element reveals a character
+        if (sharedState && sharedState.shuffleCounter > lastShuffleCounter) {
+            lastShuffleCounter = sharedState.shuffleCounter;
+            // Generate new random characters for unrevealed positions
+            randomChars = finalChars.map((ch) => randomCharFor(ch));
+        }
+
+        let displayText = '';
+
+        for (let i = 0; i < textLength; i++) {
+            if (i < revealCount) {
+                // Revealed: show actual character
+                displayText += finalChars[i];
+            } else {
+                // Not revealed: show random crypto character
+                displayText += randomChars[i];
+            }
+        }
+
+        element.textContent = displayText;
+
+        // Debug: Log character count
+        console.log(`[${element.className}] Expected: ${textLength}, Actual: ${displayText.length}, Progress: ${progress.toFixed(2)}`);
+
+        // Continue animating until this element is done (factoring in delay)
+        if (elapsed < startDelay + duration) {
+            requestAnimationFrame(animate);
+        } else {
+            // Final state: show actual text
+            element.textContent = finalText;
+            console.log(`[${element.className}] FINAL - Expected: ${textLength}, Actual: ${finalText.length}`);
         }
     }
 
@@ -858,13 +970,13 @@ function buildSlideElements(cards, data) {
     // Customize title slide for embed mode
     const cardsWithTitle = [
         {
-            title: 'Recap',
+            title: 'Your Schoology Recap',
             desc: isEmbed
-                ? `${userName}'s academic achievements from the past year.`
-                : 'Explore your academic achievements from your past year and share them with friends!',
-            bg: '#1b8f4b',
-            fg: '#e6ffee',
-            ac: '#0ea5e9',
+                ? `${userName}'s stats from their Schoology data`
+                : 'Explore your Schoology data stats and share with friends with the buttons at the bottom.',
+            bg: '#000',
+            fg: '#000',
+            ac: '#000',
             emj: '👋',
             type: 'static',
             effect: {}
@@ -915,7 +1027,7 @@ function buildSlideElements(cards, data) {
         }
 
         if (isTitleSlide) {
-            big.textContent = 'Your Schoology Recap';
+            big.textContent = userName ? `${userName}'s Recap` : 'Your Schoology Recap';
             // smaller than usual
             big.style.fontSize = 'clamp(40px, 6vw, 60px)';
             big.style.fontWeight = '600';
@@ -925,6 +1037,144 @@ function buildSlideElements(cards, data) {
         } else if (card.type === 'text_reveal') {
             const firstOption = card.effect?.reveal_scroll_options?.[0] || '';
             big.textContent = firstOption;
+        } else if (card.type === 'list') {
+            // Create container for list items
+            big.innerHTML = '';
+            big.classList.add('list-container');
+
+            // Get list template from effect
+            const listTemplate = card.effect?.list?.[0];
+            if (!listTemplate) {
+                big.textContent = 'No data';
+            } else {
+                // Get actual data array (e.g., top_classmates)
+                const dataKey = card.effect?.data_key || 'top_classmates';
+                const listData = data[dataKey] || [];
+
+                // Create DOM elements for each list item
+                listData.forEach((item, idx) => {
+                    const itemEl = document.createElement('div');
+                    itemEl.className = 'list-item';
+                    itemEl.dataset.itemIndex = idx;
+
+                    // Handle array fields (like sections) - join them
+                    const itemForSubstitution = {...item};
+                    if (Array.isArray(itemForSubstitution.sections)) {
+                        itemForSubstitution.sections = itemForSubstitution.sections.join(', ');
+                    }
+
+                    // Substitute variables for this specific item
+                    const titleText = substituteVariables(listTemplate.title, itemForSubstitution);
+                    const subtitleText = substituteVariables(listTemplate.subtitle, itemForSubstitution);
+
+                    // Store final text in data attributes
+                    itemEl.dataset.titleText = titleText;
+                    itemEl.dataset.subtitleText = subtitleText;
+
+                    // Create title and subtitle elements (initially encrypted with random chars)
+                    const cryptoChars = card.effect?.crypto_chars || 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:#.!?';
+                    const randomCharFor = (targetChar) =>
+                        /[A-Za-z0-9]/.test(targetChar)
+                            ? cryptoChars[Math.floor(Math.random() * cryptoChars.length)]
+                            : targetChar;
+
+                    const titleDiv = document.createElement('div');
+                    titleDiv.className = 'list-item-title';
+                    // Preserve punctuation/spacing structure in the encrypted view
+                    const randomTitleText = Array.from(titleText).map((ch) => randomCharFor(ch)).join('');
+                    titleDiv.textContent = randomTitleText;
+
+                    const subtitleDiv = document.createElement('div');
+                    subtitleDiv.className = 'list-item-subtitle';
+                    // Preserve punctuation/spacing structure in the encrypted view
+                    const randomSubtitleText = Array.from(subtitleText).map((ch) => randomCharFor(ch)).join('');
+                    subtitleDiv.textContent = randomSubtitleText;
+
+                    itemEl.appendChild(titleDiv);
+                    itemEl.appendChild(subtitleDiv);
+                    big.appendChild(itemEl);
+                });
+            }
+        } else if (card.type === 'grid') {
+            // Create grid summary of all previous cards
+            big.innerHTML = '';
+            big.classList.add('slide-grid-container');
+
+            // Pull colors from original cards (excluding the title slide)
+            const originalCards = cards.slice(0, 7); // First 7 cards (not including the grid card)
+
+            // Helper function to create a grid item with position
+            const createGridItem = (title, value, sourceCard, col, row, isCenter = false, isDouble = false) => {
+                const gridItem = document.createElement('div');
+                gridItem.className = 'grid-item';
+                if (isCenter) {
+                    gridItem.classList.add('center');
+                }
+                if (isDouble) {
+                    gridItem.classList.add('double');
+                }
+                gridItem.style.backgroundColor = sourceCard.bg;
+                gridItem.style.color = sourceCard.fg;
+                gridItem.dataset.col = col;
+                gridItem.dataset.row = row;
+                gridItem.dataset.isDouble = isDouble ? 'true' : 'false';
+
+                const itemTitle = document.createElement('div');
+                itemTitle.className = 'grid-item-title';
+                itemTitle.textContent = title;
+
+                const itemValue = document.createElement('div');
+                itemValue.className = 'grid-item-value';
+                itemValue.textContent = value;
+
+                gridItem.appendChild(itemTitle);
+                gridItem.appendChild(itemValue);
+                return gridItem;
+            };
+
+            // Create grid items with positions (col, row)
+            // Column 1 (col 0): Cards 0, 1, 2
+            big.appendChild(createGridItem(originalCards[0].title, data.total_assignments, originalCards[0], 0, 0));
+            big.appendChild(createGridItem(originalCards[1].title, data.busiest_month, originalCards[1], 0, 1));
+            big.appendChild(createGridItem(originalCards[2].title, data.weekend_subs, originalCards[2], 0, 2));
+
+            // Column 2 (col 1): Cards 3, CENTER, 4
+            big.appendChild(createGridItem(originalCards[3].title, data.weekday_subs, originalCards[3], 1, 0));
+            big.appendChild(createGridItem('Your Recap', `${data.user_name || 'Your'} 2025`, card, 1, 1, true));
+            big.appendChild(createGridItem(originalCards[4].title, data.avg_procrastination + ' hrs', originalCards[4], 1, 2));
+
+            // Column 3 (col 2): Card 5, Top classmates (double height at row 1-2)
+            big.appendChild(createGridItem(originalCards[5].title, data.night_owl_subs, originalCards[5], 2, 0));
+            const topClassmatesValue = (data.top_classmates || []).slice(0, 3).map(c => c.name).join(', ') || 'None';
+            big.appendChild(createGridItem(originalCards[6].title, topClassmatesValue, originalCards[6], 2, 1, false, true));
+
+            // Calculate and set positions
+            const positionGridItems = () => {
+                const container = big;
+                const containerWidth = container.offsetWidth;
+                const gap = 20; // Match CSS gap
+                const squareSize = ((containerWidth*0.5) - (gap * 2)) / 3;
+
+                container.querySelectorAll('.grid-item').forEach(item => {
+                    const col = parseInt(item.dataset.col);
+                    const row = parseInt(item.dataset.row);
+                    const isDouble = item.dataset.isDouble === 'true';
+
+                    const left = col * (squareSize + gap);
+                    const top = row * (squareSize + gap);
+                    const width = squareSize;
+                    const height = isDouble ? (squareSize * 2 + gap) : squareSize;
+
+                    item.style.left = `${left}px`;
+                    item.style.top = `${top}px`;
+                    item.style.width = `${width}px`;
+                    item.style.height = `${height}px`;
+                });
+            };
+
+            // Position items after a brief delay to ensure container is sized
+            setTimeout(positionGridItems, 10);
+            window.addEventListener('resize', positionGridItems);
         } else {
             big.textContent = substituteVariables(card.title, data);
         }
@@ -1256,6 +1506,24 @@ function resetSlideEffect(index) {
     } else if (type === 'text_reveal') {
         const firstOption = effect.reveal_scroll_options?.[0] || '';
         bigElement.textContent = firstOption;
+    } else if (type === 'list') {
+        // Reset to encrypted state with random crypto chars
+        const cryptoChars = effect.crypto_chars || '▓▒░█▄▀▌│┤┐└┴┬├─┼╔╗╚╝║═╬';
+        const randomCharFor = (targetChar) =>
+            /[A-Za-z0-9]/.test(targetChar)
+                ? cryptoChars[Math.floor(Math.random() * cryptoChars.length)]
+                : targetChar;
+        const items = bigElement.querySelectorAll('.list-item');
+        items.forEach(item => {
+            const titleEl = item.querySelector('.list-item-title');
+            const subtitleEl = item.querySelector('.list-item-subtitle');
+            const titleText = item.dataset.titleText || '';
+            const subtitleText = item.dataset.subtitleText || '';
+
+            titleEl.textContent = Array.from(titleText).map((ch) => randomCharFor(ch)).join('');
+
+            subtitleEl.textContent = Array.from(subtitleText).map((ch) => randomCharFor(ch)).join('');
+        });
     }
 }
 
@@ -1277,6 +1545,8 @@ function restartSlideEffect(index) {
         runCountUpEffect(bigElement, effect, recapData);
     } else if (type === 'text_reveal') {
         runTextRevealEffect(bigElement, effect, recapData);
+    } else if (type === 'list') {
+        runCryptoRevealEffect(bigElement, effect);
     }
 }
 
@@ -1503,9 +1773,49 @@ function downloadCurrentSlide() {
     link.click();
 }
 
-function copyShareLink() {
+function updateControlsTooltip(target, text) {
+    if (!target) return;
+    target.setAttribute('data-tooltip', text);
+    target.setAttribute('aria-label', text);
+}
+
+function copyShareLink(target) {
     // Share link if email is 28axu@pinewood.edu then https://recap.pinewood.one/s/28axu
     const email = recapData?.user_email || '';
     const shareLink = `https://recap.pinewood.one/s/${email.split('@')[0]}`;
-    navigator.clipboard.writeText(shareLink);
+    const tooltipTarget = target || document.getElementById('copy-share-link');
+
+    const showCopiedTooltip = () => {
+        updateControlsTooltip(tooltipTarget, COPY_SHARE_TOOLTIP_SUCCESS);
+        setTimeout(() => updateControlsTooltip(tooltipTarget, COPY_SHARE_TOOLTIP_DEFAULT), 1600);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(shareLink).then(showCopiedTooltip).catch(() => {
+            updateControlsTooltip(tooltipTarget, COPY_SHARE_TOOLTIP_DEFAULT);
+        });
+    } else {
+        const fallbackInput = document.createElement('input');
+        fallbackInput.value = shareLink;
+        fallbackInput.setAttribute('readonly', '');
+        fallbackInput.style.position = 'absolute';
+        fallbackInput.style.left = '-9999px';
+        document.body.appendChild(fallbackInput);
+        const selection = document.getSelection();
+        const selectedRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+        fallbackInput.select();
+        try {
+            document.execCommand('copy');
+            showCopiedTooltip();
+        } catch (err) {
+            console.error('Failed to copy share link', err);
+            updateControlsTooltip(tooltipTarget, COPY_SHARE_TOOLTIP_DEFAULT);
+        } finally {
+            document.body.removeChild(fallbackInput);
+            if (selectedRange && selection) {
+                selection.removeAllRanges();
+                selection.addRange(selectedRange);
+            }
+        }
+    }
 }

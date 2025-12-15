@@ -102,6 +102,43 @@
                 "step": 1,
                 "emj-effect": "stars"
             }
+        },
+        {
+            "title": "Top classmates",
+            "type": "list",
+            "bg": "#1a1a2e",
+            "fg": "#eaeaea",
+            "ac": "#0ea5e9",
+            "emj": "👥",
+            "desc": "You shared a lot of classes with these students!",
+            "effect": {
+                "data_key": "top_classmates",
+                "list": [
+                    {
+                        "title": "%{name}: %{count} shared classes",
+                        "subtitle": "%{sections}"
+                    }
+                ],
+                "item_duration": 1000,
+                "stagger_delay": 1000,
+                "crypto_chars": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:#.!?"
+            }
+        },
+        {
+            "title": "Your Recap",
+            "type": "grid",
+            "bg": "#000000",
+            "fg": "#ffffff",
+            "ac": "#00ff00",
+            "emj": "✨",
+            "desc": "Thanks for using Pinewood One!",
+            "effect": {}
         }
-    ]
+    ],
+    "grid": {
+        "title": "Your 2025 Recap",
+        "bg": "#000000",
+        "fg": "#ffffff",
+        "ac": "#00ff00"
+    }
 }

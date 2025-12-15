@@ -704,14 +704,6 @@ def build_recap(payload):
     if course_assignment_counts:
         top_assignment_course = max(course_assignment_counts.items(), key=lambda x: x[1])
 
-    # Class size champion
-    class_sizes = {}
-    for section in sections:
-        class_sizes[section.id] = len(section_enrollments.get(section.id, []))
-    class_size_champ = None
-    if class_sizes:
-        class_size_champ = max(class_sizes.items(), key=lambda x: x[1])
-
     # Weekend / Weekday / Night owl
     weekend_subs = weekday_subs = night_owl_subs = 0
     for sub in latest_submissions.values():
@@ -769,7 +761,7 @@ def build_recap(payload):
             if str(getattr(enr, "uid", "")) == str(user_id):
                 continue
             classmate_counts[enr.uid]["count"] += 1
-            classmate_counts[enr.uid]["sections"].add(getattr(section, "course_title", ""))
+            classmate_counts[enr.uid]["sections"].add(f'{getattr(section, "course_title", "")}: {getattr(section, "section_title", "")}')
             classmate_counts[enr.uid]["name"] = getattr(enr, "name_display", f"User {enr.uid}")
 
     top_classmates = sorted(classmate_counts.items(), key=lambda x: x[1]["count"], reverse=True)[:5]
@@ -812,9 +804,15 @@ def build_recap(payload):
         "top_assignment_course": getattr(section_lookup.get(top_assignment_course[0]), "course_title", "") if top_assignment_course else "",
         "top_assignment_count": top_assignment_course[1] if top_assignment_course else 0,
 
-        # Class size
-        "class_size_champ": getattr(section_lookup.get(class_size_champ[0]), "course_title", "") if class_size_champ else "",
-        "class_size_count": class_size_champ[1] if class_size_champ else 0,
+        # Top classmates
+        "top_classmates": [
+            {
+                "name": c["name"],
+                "count": c["count"],
+                "sections": list(c["sections"]),
+            }
+            for _, c in top_classmates
+        ],
     }
 
 

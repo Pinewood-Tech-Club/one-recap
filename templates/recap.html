@@ -31,9 +31,9 @@
       <div class="left-side-controls">
         <h2>Recap <span style="font-size: 10px;">by Tech Club</span></h2>
         <!-- disable special effects toggle (default on) -->
-        <a class="controls-icon" onclick="toggleEffects()"><img src="/static/icons/fireworks.svg" alt="Effects" height="32" /></a>
-        <a class="controls-icon" onclick="downloadCurrentSlide()"><img src="/static/icons/square.and.arrow.down.svg" alt="Download" height="32" /></a>
-        <a class="controls-icon" onclick="copyShareLink()"><img src="/static/icons/square.and.arrow.up.svg" alt="Copy Link" height="32" /></a>
+        <a class="controls-icon" data-tooltip="Toggle Effects" aria-label="Toggle Effects" onclick="toggleEffects()"><img src="/static/icons/fireworks.svg" alt="Effects" height="32" /></a>
+        <a class="controls-icon" data-tooltip="Download Current Slide As Image" aria-label="Download Current Slide As Image" onclick="downloadCurrentSlide()"><img src="/static/icons/square.and.arrow.down.svg" alt="Download" height="32" /></a>
+        <a class="controls-icon" id="copy-share-link" data-tooltip="Copy Share URL" aria-label="Copy Share URL" onclick="copyShareLink(this)"><img src="/static/icons/square.and.arrow.up.svg" alt="Copy Link" height="32" /></a>
       </div>
       <div class="slide-picker">
         <a class="controls-icon" onclick="prevslide()"><img src="/static/icons/chevron.left.svg" alt="Previous" height="32" /></a>

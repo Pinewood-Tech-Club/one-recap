@@ -6,9 +6,9 @@
   <meta property="og:image" content="https://recap.pinewood.one/si/{{ user_email.split('@')[0] }}.png" />
 {% endblock %}
 {% block content %}
-<div class="card">
+<div class="card wide-card">
   <h1>{{ user_name }}'s Recap</h1>
-  <iframe src="{{ recap_url }}?embed=true" width="80%" height="600px" style="border: none; border-radius: 24px;"></iframe>
+  <iframe src="{{ recap_url }}?embed=true" width="80%" height="600px" style="border: none; border-radius: 24px;"></iframe><br />
   <a class="button" href="https://recap.pinewood.one">Generate your own recap</a>
   <p class="note">Making your own recap is really easy! You just sign in with your Schoology account and we&apos;ll do the rest.</p>
   <p class="note">Your data is subject to our <a href="/terms">terms</a>.</p>
