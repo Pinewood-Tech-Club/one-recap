@@ -1,5 +1,14 @@
 {% extends "layout.html" %}
 {% block title %}Schoology Recap{% endblock %}
+{% block meta %}
+  <meta property="og:title" content="Schoology Recap" />
+  <meta property="og:description" content="Explore your academic achievements from your past year and share them with friends!" />
+  {% if share_image_url %}
+  <meta property="og:image" content="{{ share_image_url }}" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="{{ share_image_url }}" />
+  {% endif %}
+{% endblock %}
 {% block content %}
   <div class="sections">
     <div class="controls-picker-list"></div>
@@ -52,6 +61,7 @@
     const EMAIL = {{ email|tojson }};
     const SHOW_EXISTING = {{ show_existing|tojson }};
     const IS_GENERATING = {{ is_generating|tojson }};
+    const SHARE_IMAGE_URL = {{ share_image_url|tojson }};
   </script>
   <script src="{{ url_for('static', filename='js/recap.js') }}"></script>
 {% endblock %}

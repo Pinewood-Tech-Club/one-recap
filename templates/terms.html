@@ -1,5 +1,10 @@
 {% extends "layout.html" %}
 {% block title %}Schoology Recap - Terms{% endblock %}
+{% block meta %}
+  <meta property="og:title" content="Schoology Recap - Terms" />
+  <meta property="og:description" content="Schoology Recap is a tool built by students for students. We treat your data with the utmost care and respect. Read our terms to learn more." />
+  <meta property="og:image" content="https://recap.pinewood.one/static/Slide_CTA.png" />
+{% endblock %}
 {% block content %}
   <div class="card">
     <a class="button" href="{{ url_for('index') }}" style="margin-bottom: 24px;">Back Home</a>

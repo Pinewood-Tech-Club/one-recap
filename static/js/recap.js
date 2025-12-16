@@ -140,6 +140,12 @@ let effectsEnabled = true;
 let slideMeta = [];
 let pickerCloseBound = false;
 let promptInterval = null;
+const normalizeShareImageUrl = (url) => {
+    if (!url) return null;
+    if (/^https?:\/\//i.test(url)) return url;
+    return `${window.location.origin}${url}`;
+};
+let shareImageUrl = normalizeShareImageUrl(typeof SHARE_IMAGE_URL !== 'undefined' ? SHARE_IMAGE_URL : null);
 
 function getFirstEmoji(str = '') {
     const chars = Array.from(str);
@@ -305,6 +311,37 @@ function buildSlidePicker() {
         });
         pickerCloseBound = true;
     }
+}
+
+function applyDynamicScaling() {
+    if (!slideElements.length) return;
+
+    slideElements.forEach((slide) => {
+        const content = slide.querySelector('.slide-content');
+        if (!content) return;
+
+        // Reset scale before measuring natural size
+        slide.style.setProperty('--content-scale', '1');
+
+        const availableHeight = Math.max(0, slide.clientHeight - 32);
+        const availableWidth = Math.max(0, slide.clientWidth - 32);
+        const contentHeight = content.scrollHeight;
+        const contentWidth = content.scrollWidth;
+
+        const isListSlide = !!slide.querySelector('.list-container');
+
+        let scale = 1;
+        if (contentHeight > 0 && contentWidth > 0 && availableHeight > 0 && availableWidth > 0) {
+            const heightScale = availableHeight / contentHeight;
+            const widthScale = availableWidth / contentWidth;
+            // For list slides, keep text legible and rely on scrolling—only scale to fit width.
+            scale = isListSlide ? Math.min(1, widthScale) : Math.min(1, heightScale, widthScale);
+        }
+
+        // Keep a sensible floor to avoid microscopic text on any slide type.
+        const minScale = isListSlide ? 0.9 : 0.6;
+        slide.style.setProperty('--content-scale', Math.max(scale, minScale).toFixed(3));
+    });
 }
 
 // Color conversion utilities
@@ -1002,6 +1039,9 @@ function buildSlideElements(cards, data) {
             slide.classList.add('title-slide');
         }
 
+        const slideContent = document.createElement('div');
+        slideContent.className = 'slide-content';
+
         const rawTitle = substituteVariables(card.title, data);
         const metaTitle = isTitleSlide ? 'Recap' : rawTitle;
         slideMeta.push({
@@ -1183,16 +1223,17 @@ function buildSlideElements(cards, data) {
         desc.className = 'slide-desc';
         desc.textContent = substituteVariables(card.desc, data);
 
-        slide.appendChild(title);
-        slide.appendChild(big);
-        slide.appendChild(desc);
+        slideContent.appendChild(title);
+        slideContent.appendChild(big);
+        slideContent.appendChild(desc);
 
         if (isTitleSlide) {
             const hints = document.createElement('div');
             hints.className = 'title-hints';
-            slide.appendChild(hints);
+            slideContent.appendChild(hints);
         }
 
+        slide.appendChild(slideContent);
         wrapper.appendChild(slide);
         slideElements.push(slide);
     });
@@ -1218,6 +1259,8 @@ function buildSlideElements(cards, data) {
     setControlsForIndex(0);
     startTitleHints();
     buildSlidePicker();
+    applyDynamicScaling();
+    setTimeout(applyDynamicScaling, 50);
 }
 
 
@@ -1339,6 +1382,7 @@ function initHorizontalScroll() {
         resizeTimeout = setTimeout(() => {
             const slideWidth = slidesWrapper.offsetWidth;
             slidesWrapper.scrollTo({ left: targetSlideIndex * slideWidth, behavior: 'auto' });
+            applyDynamicScaling();
             restartSlideEffect(targetSlideIndex);
         }, 150);
     });
@@ -1598,6 +1642,10 @@ async function showRecapSlides(backendData) {
     document.querySelector(".existing-recap").classList.add("hidden");
     document.querySelector(".generating-recap").classList.add("hidden");
 
+    if (backendData?.share_images?.grid) {
+        shareImageUrl = normalizeShareImageUrl(backendData.share_images.grid);
+    }
+
     try {
         // Load recap-style.json
         const response = await fetch('/static/recap-style.json');
@@ -1621,6 +1669,19 @@ async function showRecapSlides(backendData) {
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", init_page);
+document.addEventListener('mouseover', (e) => {
+    const target = e.target.closest('.controls-icon[data-tooltip]');
+    if (!target) return;
+    const text = target.getAttribute('data-tooltip');
+    if (text) {
+        showControlsTooltip(target, text, 0);
+    }
+});
+document.addEventListener('mouseout', (e) => {
+    const target = e.target.closest('.controls-icon[data-tooltip]');
+    if (!target) return;
+    hideControlsTooltip();
+});
 
 
 // functions for button
@@ -1752,18 +1813,19 @@ function renderSlideToCanvas(index) {
     ctx.font = '400 42px sans-serif';
     ctx.fillText(desc, w / 2, h * 0.65);
 
-    // Footer CTA
-    ctx.font = '500 40px sans-serif';
-    ctx.fillText('Get yours at', w / 2, h * 0.9);
-    ctx.font = '700 42px sans-serif';
-    ctx.fillText('https://recap.pinewood.one', w / 2, h * 0.95);
-
     ctx.restore();
 
     return canvas.toDataURL('image/png');
 }
 
 function downloadCurrentSlide() {
+    if (shareImageUrl) {
+        const link = document.createElement('a');
+        link.download = `recap-${RECAP_ID || 'grid'}.png`;
+        link.href = shareImageUrl;
+        link.click();
+        return;
+    }
     if (!slideElements.length) return;
     const dataUrl = renderSlideToCanvas(activeSlideIndex || 0);
     if (!dataUrl) return;
@@ -1771,6 +1833,62 @@ function downloadCurrentSlide() {
     link.download = `recap-slide-${(activeSlideIndex || 0) + 1}.png`;
     link.href = dataUrl;
     link.click();
+}
+
+let controlsTooltipEl = null;
+let controlsTooltipTimeout = null;
+
+function ensureControlsTooltip() {
+    if (controlsTooltipEl) return controlsTooltipEl;
+    const el = document.createElement('div');
+    el.className = 'controls-tooltip-layer';
+    document.body.appendChild(el);
+    controlsTooltipEl = el;
+    return el;
+}
+
+function hideControlsTooltip() {
+    if (controlsTooltipTimeout) {
+        clearTimeout(controlsTooltipTimeout);
+        controlsTooltipTimeout = null;
+    }
+    if (controlsTooltipEl) {
+        controlsTooltipEl.classList.remove('visible');
+    }
+}
+
+function showControlsTooltip(target, text, duration = 1600) {
+    if (!target) return;
+    const tooltip = ensureControlsTooltip();
+    tooltip.textContent = text;
+    tooltip.style.width = 'auto';
+    tooltip.style.maxWidth = 'none';
+    // Measure natural width first to clamp precisely to text
+    tooltip.style.visibility = 'hidden';
+    const rect = target.getBoundingClientRect();
+    // Position tooltip centered above target, but constrained to viewport
+    const padding = 10;
+    const measuredWidth = Math.ceil(tooltip.scrollWidth) || rect.width;
+    const maxWidth = Math.min(360, window.innerWidth - padding * 2);
+    const tooltipWidth = Math.min(measuredWidth, maxWidth);
+    tooltip.style.width = `${tooltipWidth}px`;
+    tooltip.style.maxWidth = `${maxWidth}px`;
+    const left = Math.min(
+        window.innerWidth - tooltipWidth - padding,
+        Math.max(padding, rect.left + rect.width / 2 - tooltipWidth / 2)
+    );
+    const tooltipHeight = tooltip.offsetHeight || 0;
+    const top = Math.max(padding, rect.top - tooltipHeight - 12);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    tooltip.style.visibility = '';
+    tooltip.classList.add('visible');
+    if (duration > 0) {
+        if (controlsTooltipTimeout) clearTimeout(controlsTooltipTimeout);
+        controlsTooltipTimeout = setTimeout(() => {
+            hideControlsTooltip();
+        }, duration);
+    }
 }
 
 function updateControlsTooltip(target, text) {
@@ -1786,6 +1904,7 @@ function copyShareLink(target) {
     const tooltipTarget = target || document.getElementById('copy-share-link');
 
     const showCopiedTooltip = () => {
+        showControlsTooltip(tooltipTarget, COPY_SHARE_TOOLTIP_SUCCESS, 1600);
         updateControlsTooltip(tooltipTarget, COPY_SHARE_TOOLTIP_SUCCESS);
         setTimeout(() => updateControlsTooltip(tooltipTarget, COPY_SHARE_TOOLTIP_DEFAULT), 1600);
     };

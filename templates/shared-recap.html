@@ -2,8 +2,12 @@
 {% block title %}Schoology Recap - {{ user_name }}{% endblock %}
 {% block meta %}
   <meta property="og:title" content="{{ user_name }}'s Schoology Recap" />
-  <meta property="og:description" content="{{ user_name }} did {{ total_assignments }} assignments in {{ total_courses }} courses. Find more stats by clicking the link! You can also generate your own easily." />
-  <meta property="og:image" content="https://recap.pinewood.one/si/{{ user_email.split('@')[0] }}.png" />
+  <meta property="og:description" content="{{ user_name }} did {{ total_assignments }} assignments in {{ total_courses }} courses. Find more stats by clicking the link! You can also generate your own at recap.pinewood.one" />
+  {% if share_image_url %}
+  <meta property="og:image" content="{{ share_image_url }}" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="{{ share_image_url }}" />
+  {% endif %}
 {% endblock %}
 {% block content %}
 <div class="card wide-card">

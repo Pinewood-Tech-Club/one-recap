@@ -22,7 +22,6 @@ import base64
 from datetime import datetime, timedelta
 from collections import defaultdict
 from types import SimpleNamespace
-
 from flask import (
     Flask,
     render_template,
@@ -34,6 +33,7 @@ from flask import (
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_sock import Sock
+from test_img import render_recap_grid
 
 # Optional dotenv load for local dev
 try:
@@ -174,6 +174,19 @@ def save_recap(recap_id, email, slides):
     conn.close()
 
 
+def update_recap_slides(recap_id, slides):
+    """Update slides_json for an existing recap."""
+    conn = get_conn()
+    cur = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    cur.execute(
+        "UPDATE recaps SET slides_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(slides), now, recap_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 # Job operations (temporary queue)
 def create_job(job_id, email, access_token, access_token_secret, two_legged=False):
     """Create a new job in the queue."""
@@ -300,6 +313,19 @@ def notify_progress(job_id: str, payload: dict):
     # Update job progress (not status, since status is only queued/running)
     if payload.get("status") not in ["done", "error"]:
         update_job_progress(job_id, payload)
+
+
+def get_base_url():
+    """Return the externally reachable base URL."""
+    base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base_url:
+        base_url = request.host_url.rstrip("/")
+    return base_url
+
+
+def get_share_image_url(recap_id: str):
+    base_url = get_base_url()
+    return f"{base_url}/static/userdata/{recap_id}/grid.png"
 
 
 def fetch_user_profile(auth, user_id: str | None):
@@ -561,6 +587,56 @@ def paginated_list(auth, path: str, key: str | None = None):
     return items
 
 
+def _to_float(val, default=0.0):
+    try:
+        return float(val)
+    except Exception:
+        return default
+
+
+def generate_share_images(slides: dict, recap_id: str):
+    """Generate shareable recap grid image and stash path in slides."""
+    static_root = app.static_folder or os.path.join(app.root_path, "static")
+    out_dir = os.path.join(static_root, "userdata", recap_id)
+    os.makedirs(out_dir, exist_ok=True)
+
+    try:
+        data = {
+            "total_assignments": slides.get("total_assignments", 0),
+            "course_count": slides.get("total_courses", slides.get("course_count", 0)),
+            "late_night_submissions": slides.get("night_owl_subs", 0),
+            "busiest_month": slides.get("busiest_month", ""),
+            "busiest_month_assignments": slides.get("assignments_bm", 0),
+            "weekend_submissions": slides.get("weekend_subs", 0),
+            "avg_hours_before_deadline": _to_float(slides.get("avg_procrastination", 0.0)),
+            "top_classmates": [
+                {
+                    "name": c.get("name", ""),
+                    "detail": f"{c.get('count', 0)} shared classes",
+                    "sections": c.get("sections", []),
+                }
+                for c in (slides.get("top_classmates") or [])[:3]
+            ],
+        }
+
+        grid_path = os.path.join(out_dir, "grid.png")
+        static_title_path = os.path.join(static_root, "Slide_center-title.png")
+        static_cta_path = os.path.join(static_root, "Slide_CTA.png")
+        render_recap_grid(
+            grid_path,
+            data,
+            static_title_path=static_title_path,
+            static_cta_path=static_cta_path,
+        )
+        slides["share_images"] = {
+            "grid": f"/static/userdata/{recap_id}/grid.png",
+        }
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to generate share image for recap %s: %s", recap_id, exc)
+
+    return slides
+
+
 def build_recap(payload):
     """
     Fetch Schoology data and compute recap slides.
@@ -775,10 +851,11 @@ def build_recap(payload):
     total_assignments = sum(len(assigns) for assigns in assignments_by_section.values())
 
     # Return computed variables for frontend to use with recap-style.json
-    return {
+    slides = {
         # Basic counts
         "total_assignments": total_assignments,
         "total_courses": len(sections),
+        "course_count": len(sections),
         "user_name": schoology_user.get("name", ""),
         "user_avatar": schoology_user.get("avatar", ""),
         "user_email": schoology_user.get("email", ""),
@@ -814,6 +891,8 @@ def build_recap(payload):
             for _, c in top_classmates
         ],
     }
+    # Generate shareable images
+    return generate_share_images(slides, job_id)
 
 
 # Routes --------------------------------------------------------------------
@@ -916,6 +995,7 @@ def recap_index():
         return render_template("recap.html",
                              recap_id=existing_recap["id"],
                              email=email,
+                             share_image_url=get_share_image_url(existing_recap["id"]),
                              show_existing=True,
                              is_generating=False)
     elif active_job:
@@ -941,6 +1021,7 @@ def recap_view(recap_id):
         return render_template("recap.html",
                              recap_id=recap_id,
                              email=job["email"],
+                             share_image_url=get_share_image_url(recap_id),
                              show_existing=False,
                              is_generating=True)
 
@@ -951,6 +1032,7 @@ def recap_view(recap_id):
         return render_template("recap.html",
                              recap_id=recap_id,
                              email=recap["email"],
+                             share_image_url=get_share_image_url(recap_id),
                              show_existing=False,
                              is_generating=False)
 
@@ -964,6 +1046,15 @@ def get_recap_api(recap_id):
     recap = get_recap_by_id(recap_id)
     if not recap:
         return jsonify({"error": "not_found"}), 404
+    slides = recap.get("slides") or {}
+    grid_rel = (slides.get("share_images") or {}).get("grid")
+    grid_abs = None
+    if grid_rel and grid_rel.startswith("/"):
+        grid_abs = os.path.join(app.root_path, grid_rel.lstrip("/"))
+    if not grid_rel or not grid_abs or not os.path.exists(grid_abs):
+        slides = generate_share_images(slides, recap_id)
+        recap["slides"] = slides
+        update_recap_slides(recap_id, slides)
     return jsonify(recap)
 
 
@@ -1029,7 +1120,15 @@ def shared_recap(username):
     if not recap or not recap.get("slides"):
         return "Recap not found", 404
 
-    slides = recap["slides"]
+    slides = recap["slides"] or {}
+    grid_rel = (slides.get("share_images") or {}).get("grid")
+    grid_abs = None
+    if grid_rel and grid_rel.startswith("/"):
+        grid_abs = os.path.join(app.root_path, grid_rel.lstrip("/"))
+    if not grid_rel or not grid_abs or not os.path.exists(grid_abs):
+        slides = generate_share_images(slides, recap["id"])
+        update_recap_slides(recap["id"], slides)
+        recap["slides"] = slides
 
     # Build recap URL for iframe
     base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
@@ -1045,6 +1144,8 @@ def shared_recap(username):
         total_assignments=slides.get("total_assignments", 0),
         total_courses=slides.get("total_courses", 0),
         recap_url=recap_url,
+        share_image_url=slides.get("share_images", {}).get("grid") and f"{base_url}{slides.get('share_images', {}).get('grid')}"
+        or f"{base_url}/static/recap-card.png",
     )
 
 
