@@ -146,6 +146,7 @@ const normalizeShareImageUrl = (url) => {
     return `${window.location.origin}${url}`;
 };
 let shareImageUrl = normalizeShareImageUrl(typeof SHARE_IMAGE_URL !== 'undefined' ? SHARE_IMAGE_URL : null);
+let shareSlideImages = {};
 
 function getFirstEmoji(str = '') {
     const chars = Array.from(str);
@@ -1645,6 +1646,12 @@ async function showRecapSlides(backendData) {
     if (backendData?.share_images?.grid) {
         shareImageUrl = normalizeShareImageUrl(backendData.share_images.grid);
     }
+    if (backendData?.share_images?.slides) {
+        shareSlideImages = {};
+        Object.entries(backendData.share_images.slides).forEach(([idx, url]) => {
+            shareSlideImages[Number(idx)] = normalizeShareImageUrl(url);
+        });
+    }
 
     try {
         // Load recap-style.json
@@ -1819,18 +1826,22 @@ function renderSlideToCanvas(index) {
 }
 
 function downloadCurrentSlide() {
-    if (shareImageUrl) {
+    if (!slideElements.length) return;
+    const idx = activeSlideIndex || 0;
+
+    // Prefer server-rendered slide images when available (indices match slide order; title is 0)
+    if (shareSlideImages && shareSlideImages[idx]) {
         const link = document.createElement('a');
-        link.download = `recap-${RECAP_ID || 'grid'}.png`;
-        link.href = shareImageUrl;
+        link.download = `recap-slide-${idx + 1}.png`;
+        link.href = shareSlideImages[idx];
         link.click();
         return;
     }
-    if (!slideElements.length) return;
-    const dataUrl = renderSlideToCanvas(activeSlideIndex || 0);
+
+    const dataUrl = renderSlideToCanvas(idx);
     if (!dataUrl) return;
     const link = document.createElement('a');
-    link.download = `recap-slide-${(activeSlideIndex || 0) + 1}.png`;
+    link.download = `recap-slide-${idx + 1}.png`;
     link.href = dataUrl;
     link.click();
 }

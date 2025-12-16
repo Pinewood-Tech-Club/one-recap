@@ -461,7 +461,7 @@ def render_recap_grid(
     """
     Build 3×3 grid:
       Row 1: assignments, late night, busiest month
-      Row 2: assignments variant, static title, top classmates
+      Row 2: weekday submissions, static title, top classmates
       Row 3: weekend submissions, avg hours before deadline, static CTA
     """
     g = gap if gap is not None else int(tile_size * 0.05)
@@ -517,16 +517,16 @@ def render_recap_grid(
         return_image=True,
     )
 
-    # Tile 4 (variant)
+    # Tile 4 (weekday submissions)
     tile4 = render_general_stat_card(
         None,
-        total_assignments,
-        "I had",
-        "assignments in Schoology",
-        small_text=f"across {course_count} courses",
-        background=(11, 21, 35),
+        data.get("weekday_submissions", data.get("weekday_subs", 0)),
+        "I submitted",
+        "assignments to Schoology",
+        small_text="on weekdays",
+        background=(12, 23, 40),
         foreground=(226, 232, 240),
-        accent=(16, 196, 196),
+        accent=(34, 211, 238),
         size=tile_size,
         offsets=[0.10, 0.32, 0.09, 0.08],
         return_image=True,

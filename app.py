@@ -33,7 +33,13 @@ from flask import (
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_sock import Sock
-from test_img import render_recap_grid
+from test_img import (
+    render_busiest_month_card,
+    render_general_stat_card,
+    render_procrast_stat_card,
+    render_recap_grid,
+    render_top_classmates_card,
+)
 
 # Optional dotenv load for local dev
 try:
@@ -628,8 +634,95 @@ def generate_share_images(slides: dict, recap_id: str):
             static_title_path=static_title_path,
             static_cta_path=static_cta_path,
         )
+
+        # Per-slide images mapped to slide indices (0 = title, so start at 1)
+        slide_images = {}
+        try:
+            slide_images[1] = f"/static/userdata/{recap_id}/slide-1.png"
+            render_general_stat_card(
+                os.path.join(out_dir, "slide-1.png"),
+                data["total_assignments"],
+                "I had",
+                "assignments in Schoology",
+                small_text=f"across {data.get('course_count', 0)} courses",
+                background=(15, 23, 42),
+                foreground=(226, 232, 240),
+                accent=(34, 211, 238),
+                size=1080,
+            )
+
+            slide_images[2] = f"/static/userdata/{recap_id}/slide-2.png"
+            render_busiest_month_card(
+                os.path.join(out_dir, "slide-2.png"),
+                data.get("busiest_month", "October"),
+                detail_text=f"With {data.get('busiest_month_assignments', 0)} assignments",
+                size=1080,
+            )
+
+            slide_images[3] = f"/static/userdata/{recap_id}/slide-3.png"
+            render_general_stat_card(
+                os.path.join(out_dir, "slide-3.png"),
+                data.get("weekend_submissions", 0),
+                "I submitted",
+                "assignments to Schoology",
+                small_text="on weekends",
+                background=(10, 22, 37),
+                foreground=(226, 232, 240),
+                accent=(34, 211, 238),
+                size=1080,
+            )
+
+            slide_images[4] = f"/static/userdata/{recap_id}/slide-4.png"
+            render_general_stat_card(
+                os.path.join(out_dir, "slide-4.png"),
+                data.get("weekday_submissions", data.get("weekday_subs", 0)),
+                "I submitted",
+                "assignments to Schoology",
+                small_text="on weekdays",
+                background=(12, 23, 40),
+                foreground=(226, 232, 240),
+                accent=(34, 211, 238),
+                size=1080,
+            )
+
+            slide_images[5] = f"/static/userdata/{recap_id}/slide-5.png"
+            render_procrast_stat_card(
+                os.path.join(out_dir, "slide-5.png"),
+                data.get("avg_hours_before_deadline", data.get("avg_procrastination", 0.0)),
+                background=(237, 110, 102),
+                foreground=(255, 255, 255),
+                accent=(253, 224, 71),
+                size=1080,
+            )
+
+            slide_images[6] = f"/static/userdata/{recap_id}/slide-6.png"
+            render_general_stat_card(
+                os.path.join(out_dir, "slide-6.png"),
+                data.get("late_night_submissions", data.get("night_owl_subs", 0)),
+                "I submitted",
+                "assignments to Schoology",
+                small_text="past 10pm",
+                background=(12, 23, 40),
+                foreground=(226, 232, 240),
+                accent=(34, 211, 238),
+                size=1080,
+            )
+
+            slide_images[7] = f"/static/userdata/{recap_id}/slide-7.png"
+            render_top_classmates_card(
+                os.path.join(out_dir, "slide-7.png"),
+                data.get("top_classmates", []),
+                background=(20, 21, 35),
+                foreground=(230, 234, 240),
+                accent=(14, 165, 233),
+                size=1080,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to render per-slide images for %s: %s", recap_id, exc)
+
         slides["share_images"] = {
             "grid": f"/static/userdata/{recap_id}/grid.png",
+            "slides": slide_images,
         }
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to generate share image for recap %s: %s", recap_id, exc)
